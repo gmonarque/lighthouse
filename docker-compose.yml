@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  lighthouse:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lighthouse:latest
+    container_name: lighthouse
+    restart: unless-stopped
+    ports:
+      - "9999:9999"
+    volumes:
+      - lighthouse_data:/app/data
+      - lighthouse_config:/app/config
+    environment:
+      - TZ=UTC
+      # Uncomment and set your API keys
+      # - LIGHTHOUSE_ENRICHMENT_TMDB_API_KEY=your_tmdb_key
+      # - LIGHTHOUSE_ENRICHMENT_OMDB_API_KEY=your_omdb_key
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9999/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  lighthouse_data:
+    driver: local
+  lighthouse_config:
+    driver: local
+
+# Optional: Add to existing network with other *arr apps
+# networks:
+#   default:
+#     external: true
+#     name: media-network

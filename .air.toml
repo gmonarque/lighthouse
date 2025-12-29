@@ -1,0 +1,53 @@
+# Air configuration for hot reload during development
+# https://github.com/air-verse/air
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+# Build command
+cmd = "go build -o ./tmp/main ./cmd/lighthouse"
+# Binary output
+bin = "tmp/main"
+# Watch these directories
+include_dir = ["cmd", "internal"]
+# Watch these extensions
+include_ext = ["go", "tpl", "tmpl", "html"]
+# Exclude directories
+exclude_dir = ["assets", "tmp", "vendor", "web", "data"]
+# Exclude files
+exclude_file = []
+# Exclude regex
+exclude_regex = ["_test\\.go"]
+# Exclude unchanged files
+exclude_unchanged = true
+# Follow symlinks
+follow_symlink = true
+# Log file
+log = "air.log"
+# Delay before build (ms)
+delay = 1000
+# Stop on error
+stop_on_error = true
+# Send interrupt signal before killing
+send_interrupt = false
+# Kill delay
+kill_delay = 500
+
+[log]
+# Show log time
+time = false
+
+[color]
+# Main color
+main = "magenta"
+# Watcher color
+watcher = "cyan"
+# Build color
+build = "yellow"
+# Runner color
+runner = "green"
+
+[misc]
+# Delete tmp directory on exit
+clean_on_exit = true
