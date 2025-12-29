@@ -15,6 +15,9 @@ Self-hosted torrent indexer that pulls from the Nostr network. Comes with a Torz
 ## Screenshots
 
 <p>
+<img src="screens/onboarding.png" width="400" alt="Setup wizard">
+</p>
+<p>
 <img src="screens/home.png" width="400" alt="Dashboard">
 <img src="screens/modal.png" width="400" alt="Torrent details">
 </p>
