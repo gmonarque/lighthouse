@@ -6,6 +6,8 @@ Self-hosted Nostr indexer for NIP-35 torrent events. Comes with a Torznab API so
 
 This software is a Nostr protocol indexer that reads publicly available NIP-35 events from Nostr relays. It does not host, distribute, or provide access to any copyrighted content. The software merely indexes metadata published on the decentralized Nostr network. Users are solely responsible for their use of this software and must comply with all applicable laws in their jurisdiction.
 
+> **Note:** To fully understand the context and use case behind Lighthouse, please read the [whitepaper](whitepaper.pdf) first.
+
 ## What it does
 
 - Indexes NIP-35 (Kind 2003) events from Nostr relays
