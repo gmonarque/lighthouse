@@ -1,38 +1,21 @@
 # Lighthouse
 
-Self-hosted torrent indexer that pulls from the Nostr network. Comes with a Torznab API so it works with Prowlarr, Sonarr, Radarr, and other *arr apps.
+Self-hosted Nostr indexer for NIP-35 torrent events. Comes with a Torznab API so it works with Prowlarr, Sonarr, Radarr, and other *arr apps.
+
+## Disclaimer
+
+This software is a Nostr protocol indexer that reads publicly available NIP-35 events from Nostr relays. It does not host, distribute, or provide access to any copyrighted content. The software merely indexes metadata published on the decentralized Nostr network. Users are solely responsible for their use of this software and must comply with all applicable laws in their jurisdiction.
 
 ## What it does
 
-- Indexes torrents published on Nostr (NIP-35 / Kind 2003 events)
-- Publish torrents to Nostr relays (import from .torrent file or manual entry)
+- Indexes NIP-35 (Kind 2003) events from Nostr relays
+- Publish events to Nostr relays (import from .torrent file or manual entry)
 - Filter what is indexed based on tags
 - Web of Trust filtering - only see content from people you trust
 - Torznab API for seamless *arr apps integration
-- Auto-fetches posters and metadata from TMDB/OMDB
+- Auto-fetches metadata from TMDB/OMDB
 - Single Go binary + SQLite, runs anywhere
 - Web UI built with Svelte
-
-## Screenshots
-
-<p>
-<img src="screens/onboarding.png" width="400" alt="Setup wizard">
-</p>
-<p>
-<img src="screens/home.png" width="400" alt="Dashboard">
-<img src="screens/modal.png" width="400" alt="Torrent details">
-</p>
-<p>
-<img src="screens/search.png" width="400" alt="Search">
-<img src="screens/upload.png" width="400" alt="Publish">
-</p>
-<p>
-<img src="screens/trust.png" width="400" alt="Web of Trust">
-<img src="screens/relays.png" width="400" alt="Relays">
-</p>
-<p>
-<img src="screens/settings.png" width="400" alt="Settings">
-</p>
 
 ## Quick start
 

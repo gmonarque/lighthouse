@@ -359,13 +359,8 @@ type WhitelistEntry struct {
 
 // SeedDefaultWhitelist adds default trusted users to the whitelist
 func SeedDefaultWhitelist() error {
-	defaultEntries := []WhitelistEntry{
-		{
-			Npub:  "npub1j4ppgput8ss89v9xvsv7pww0nxdc4wxk4edt69zhakluljcnwgvq8mf8uy",
-			Alias: "nmirror",
-			Notes: "https://nostrudel.ninja/u/npub1j4ppgput8ss89v9xvsv7pww0nxdc4wxk4edt69zhakluljcnwgvq8mf8uy",
-		},
-	}
+	// No default entries - users must add their own trusted sources
+	defaultEntries := []WhitelistEntry{}
 
 	// Check if whitelist already has entries
 	var count int
