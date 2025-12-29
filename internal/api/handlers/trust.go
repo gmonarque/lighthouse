@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/lighthouse-client/lighthouse/internal/config"
 	"github.com/lighthouse-client/lighthouse/internal/database"
+	"github.com/lighthouse-client/lighthouse/internal/nostr"
 )
 
 // GetWhitelist returns all whitelisted npubs
@@ -88,20 +89,73 @@ func AddToWhitelist(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// RemoveFromWhitelist removes an npub from the whitelist
+// RemoveFromWhitelist removes an npub from the whitelist and deletes their torrents
 func RemoveFromWhitelist(w http.ResponseWriter, r *http.Request) {
 	npub := chi.URLParam(r, "npub")
 
 	db := database.Get()
-	result, err := db.Exec("DELETE FROM trust_whitelist WHERE npub = ?", npub)
+
+	// Begin transaction
+	tx, err := db.Begin()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to start transaction")
+		return
+	}
+	defer tx.Rollback()
+
+	// Check if npub exists in whitelist
+	var exists int
+	err = tx.QueryRow("SELECT COUNT(*) FROM trust_whitelist WHERE npub = ?", npub).Scan(&exists)
+	if err != nil || exists == 0 {
+		respondError(w, http.StatusNotFound, "npub not found in whitelist")
+		return
+	}
+
+	// Convert npub to hex for torrent_uploads queries (uploads are stored as hex pubkey)
+	hexPubkey, err := nostr.NpubToHex(npub)
+	if err != nil {
+		// If conversion fails, try using as-is (might already be hex)
+		hexPubkey = npub
+	}
+
+	// Delete torrents that only have this uploader
+	_, err = tx.Exec(`
+		DELETE FROM torrents
+		WHERE id IN (
+			SELECT torrent_id FROM torrent_uploads
+			WHERE uploader_npub = ?
+			GROUP BY torrent_id
+			HAVING COUNT(DISTINCT uploader_npub) = 1
+		)
+	`, hexPubkey)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to delete torrents")
+		return
+	}
+
+	// Remove upload records for this user
+	_, err = tx.Exec("DELETE FROM torrent_uploads WHERE uploader_npub = ?", hexPubkey)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to delete upload records")
+		return
+	}
+
+	// Update upload counts for remaining torrents
+	tx.Exec(`
+		UPDATE torrents SET
+			upload_count = (SELECT COUNT(*) FROM torrent_uploads WHERE torrent_id = torrents.id)
+		WHERE id IN (SELECT DISTINCT torrent_id FROM torrent_uploads)
+	`)
+
+	// Remove from whitelist
+	_, err = tx.Exec("DELETE FROM trust_whitelist WHERE npub = ?", npub)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to remove from whitelist")
 		return
 	}
 
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		respondError(w, http.StatusNotFound, "npub not found in whitelist")
+	if err := tx.Commit(); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to commit transaction")
 		return
 	}
 
@@ -163,6 +217,13 @@ func AddToBlacklist(w http.ResponseWriter, r *http.Request) {
 
 	db := database.Get()
 
+	// Convert npub to hex for torrent_uploads queries (uploads are stored as hex pubkey)
+	hexPubkey, err := nostr.NpubToHex(req.Npub)
+	if err != nil {
+		// If conversion fails, try using as-is (might already be hex)
+		hexPubkey = req.Npub
+	}
+
 	// Begin transaction
 	tx, err := db.Begin()
 	if err != nil {
@@ -195,14 +256,14 @@ func AddToBlacklist(w http.ResponseWriter, r *http.Request) {
 			GROUP BY torrent_id
 			HAVING COUNT(DISTINCT uploader_npub) = 1
 		)
-	`, req.Npub)
+	`, hexPubkey)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to delete torrents")
 		return
 	}
 
 	// Remove upload records
-	_, err = tx.Exec("DELETE FROM torrent_uploads WHERE uploader_npub = ?", req.Npub)
+	_, err = tx.Exec("DELETE FROM torrent_uploads WHERE uploader_npub = ?", hexPubkey)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to delete upload records")
 		return
