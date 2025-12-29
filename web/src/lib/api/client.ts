@@ -249,6 +249,39 @@ class APIClient {
 	async getIndexerStatus() {
 		return this.request<IndexerStatus>('/indexer/status');
 	}
+
+	// Publish
+	async parseTorrentFile(file: File): Promise<TorrentFileInfo> {
+		await this.ensureInit();
+
+		const formData = new FormData();
+		formData.append('file', file);
+
+		const headers: Record<string, string> = {};
+		if (this.apiKey) {
+			headers['X-API-Key'] = this.apiKey;
+		}
+
+		const response = await fetch(`${API_BASE}/publish/parse-torrent`, {
+			method: 'POST',
+			headers,
+			body: formData
+		});
+
+		if (!response.ok) {
+			const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+			throw new Error(error.error || `HTTP ${response.status}`);
+		}
+
+		return response.json();
+	}
+
+	async publishTorrent(data: PublishTorrentRequest): Promise<PublishTorrentResponse> {
+		return this.request<PublishTorrentResponse>('/publish', {
+			method: 'POST',
+			body: JSON.stringify(data)
+		});
+	}
 }
 
 // Types
@@ -396,6 +429,46 @@ export interface IndexerStatus {
 	enabled: boolean;
 	total_torrents: number;
 	connected_relays: number;
+}
+
+export interface TorrentFile {
+	name: string;
+	size: number;
+}
+
+export interface TorrentFileInfo {
+	info_hash: string;
+	name: string;
+	size: number;
+	files: TorrentFile[];
+	trackers: string[];
+	comment: string;
+}
+
+export interface PublishTorrentRequest {
+	info_hash: string;
+	name: string;
+	size: number;
+	category?: number;
+	files?: TorrentFile[];
+	trackers?: string[];
+	tags?: string[];
+	description?: string;
+	imdb_id?: string;
+	tmdb_id?: string;
+	relay_ids?: number[];
+}
+
+export interface PublishResult {
+	relay_id: number;
+	relay_url: string;
+	success: boolean;
+	error?: string;
+}
+
+export interface PublishTorrentResponse {
+	event_id: string;
+	results: PublishResult[];
 }
 
 export const api = new APIClient();

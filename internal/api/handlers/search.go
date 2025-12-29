@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lighthouse-client/lighthouse/internal/database"
+	"github.com/lighthouse-client/lighthouse/internal/nostr"
 )
 
 // Search performs full-text search on torrents
@@ -260,9 +261,14 @@ func GetTorrent(w http.ResponseWriter, r *http.Request) {
 
 	uploaders := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		var npub, eventID, relayURL, uploadedAt string
-		if err := rows.Scan(&npub, &eventID, &relayURL, &uploadedAt); err != nil {
+		var hexPubkey, eventID, relayURL, uploadedAt string
+		if err := rows.Scan(&hexPubkey, &eventID, &relayURL, &uploadedAt); err != nil {
 			continue
+		}
+		// Convert hex pubkey to npub format
+		npub, err := nostr.HexToNpub(hexPubkey)
+		if err != nil {
+			npub = hexPubkey // Fallback to hex if conversion fails
 		}
 		uploaders = append(uploaders, map[string]interface{}{
 			"npub":        npub,

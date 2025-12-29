@@ -113,6 +113,10 @@ func NewRouter(cfg *config.Config) *chi.Mux {
 			r.Post("/indexer/start", handlers.StartIndexer)
 			r.Post("/indexer/stop", handlers.StopIndexer)
 			r.Get("/indexer/status", handlers.GetIndexerStatus)
+
+			// Publish torrent
+			r.Post("/publish/parse-torrent", handlers.ParseTorrentFile)
+			r.Post("/publish", handlers.PublishTorrent)
 		})
 	})
 

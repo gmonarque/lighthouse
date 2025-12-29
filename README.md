@@ -5,6 +5,7 @@ Self-hosted torrent indexer that pulls from the Nostr network. Comes with a Torz
 ## What it does
 
 - Indexes torrents published on Nostr (NIP-35 / Kind 2003 events)
+- Publish torrents to Nostr relays (import from .torrent file or manual entry)
 - Filter what is indexed based on tags
 - Web of Trust filtering - only see content from people you trust
 - Torznab API for seamless *arr apps integration
@@ -23,10 +24,13 @@ Self-hosted torrent indexer that pulls from the Nostr network. Comes with a Torz
 </p>
 <p>
 <img src="screens/search.png" width="400" alt="Search">
-<img src="screens/trust.png" width="400" alt="Web of Trust">
+<img src="screens/upload.png" width="400" alt="Publish">
 </p>
 <p>
+<img src="screens/trust.png" width="400" alt="Web of Trust">
 <img src="screens/relays.png" width="400" alt="Relays">
+</p>
+<p>
 <img src="screens/settings.png" width="400" alt="Settings">
 </p>
 
@@ -139,6 +143,8 @@ Full Torznab category support with subcategories:
 | `/api/search` | GET | Search torrents |
 | `/api/torrents/:id` | GET | Torrent details |
 | `/api/torrents/:id` | DELETE | Remove torrent |
+| `/api/publish/parse-torrent` | POST | Parse .torrent file |
+| `/api/publish` | POST | Publish torrent to relays |
 | `/api/trust/whitelist` | GET/POST/DELETE | Manage whitelist |
 | `/api/trust/blacklist` | GET/POST/DELETE | Manage blacklist |
 | `/api/relays` | GET/POST/PUT/DELETE | Manage relays |

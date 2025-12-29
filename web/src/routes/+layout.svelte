@@ -6,6 +6,7 @@
 	import {
 		Home,
 		Search,
+		Upload,
 		Shield,
 		Radio,
 		Settings,
@@ -22,6 +23,7 @@
 	const navItems = [
 		{ href: '/', label: 'Dashboard', icon: Home },
 		{ href: '/search', label: 'Search', icon: Search },
+		{ href: '/publish', label: 'Publish', icon: Upload },
 		{ href: '/trust', label: 'Trust', icon: Shield },
 		{ href: '/relays', label: 'Relays', icon: Radio },
 		{ href: '/settings', label: 'Settings', icon: Settings }

@@ -408,3 +408,91 @@ func NostrTagFromCategory(code int) string {
 
 	return "other"
 }
+
+// PublishTorrentRequest contains all fields for publishing a torrent event
+type PublishTorrentRequest struct {
+	InfoHash    string        `json:"info_hash"`
+	Name        string        `json:"name"`
+	Size        int64         `json:"size"`
+	Category    int           `json:"category"`
+	Files       []TorrentFile `json:"files"`
+	Trackers    []string      `json:"trackers"`
+	Tags        []string      `json:"tags"`
+	Description string        `json:"description"`
+	ImdbID      string        `json:"imdb_id"`
+	TmdbID      string        `json:"tmdb_id"`
+}
+
+// CreateFullTorrentEvent creates a Kind 2003 event with full NIP-35 support
+func CreateFullTorrentEvent(req PublishTorrentRequest) *nostr.Event {
+	tags := nostr.Tags{}
+
+	// Required: info hash
+	if req.InfoHash != "" {
+		tags = append(tags, nostr.Tag{"x", strings.ToLower(req.InfoHash)})
+	}
+
+	// Required: title
+	if req.Name != "" {
+		tags = append(tags, nostr.Tag{"title", req.Name})
+	}
+
+	// Required: size
+	if req.Size > 0 {
+		tags = append(tags, nostr.Tag{"size", strconv.FormatInt(req.Size, 10)})
+	}
+
+	// Category as Nostr tag (movie, tv, etc.)
+	if req.Category > 0 {
+		categoryTag := NostrTagFromCategory(req.Category)
+		tags = append(tags, nostr.Tag{"t", categoryTag})
+	}
+
+	// File entries (NIP-35 format)
+	for _, file := range req.Files {
+		tags = append(tags, nostr.Tag{"file", file.Name, strconv.FormatInt(file.Size, 10)})
+	}
+
+	// Trackers
+	for _, tracker := range req.Trackers {
+		if tracker != "" {
+			tags = append(tags, nostr.Tag{"tracker", tracker})
+		}
+	}
+
+	// Content tags (4k, hd, hdr, x265, etc.)
+	for _, tag := range req.Tags {
+		if tag != "" {
+			tags = append(tags, nostr.Tag{"t", strings.ToLower(tag)})
+		}
+	}
+
+	// External IDs
+	if req.ImdbID != "" {
+		// Ensure proper format
+		imdb := req.ImdbID
+		if !strings.HasPrefix(imdb, "tt") {
+			imdb = "tt" + imdb
+		}
+		tags = append(tags, nostr.Tag{"i", "imdb:" + imdb})
+	}
+
+	if req.TmdbID != "" {
+		tags = append(tags, nostr.Tag{"i", "tmdb:" + req.TmdbID})
+	}
+
+	// Alt tag for client preview
+	if req.Name != "" {
+		tags = append(tags, nostr.Tag{"alt", "Torrent: " + req.Name})
+	}
+
+	// NIP-35: content is description only (not magnet URI)
+	content := req.Description
+
+	return &nostr.Event{
+		Kind:      KindTorrent,
+		Content:   content,
+		Tags:      tags,
+		CreatedAt: nostr.Now(),
+	}
+}

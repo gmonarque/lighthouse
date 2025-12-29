@@ -83,6 +83,7 @@ func main() {
 	// Wire up handlers to use the real indexer and relay manager
 	handlers.SetIndexerController(idx)
 	handlers.SetRelayLoader(relayManager)
+	handlers.SetPublisher(relayManager)
 
 	// Create router
 	router := api.NewRouter(cfg)

@@ -244,6 +244,113 @@ func (rm *RelayManager) PublishToAll(ctx context.Context, event *nostr.Event) er
 	return lastErr
 }
 
+// PublishResult contains the result of publishing to a single relay
+type PublishResult struct {
+	RelayID  int    `json:"relay_id"`
+	RelayURL string `json:"relay_url"`
+	Success  bool   `json:"success"`
+	Error    string `json:"error,omitempty"`
+}
+
+// PublishToRelays publishes an event to specific relays by their database IDs
+// If relayIDs is empty, publishes to all connected relays
+func (rm *RelayManager) PublishToRelays(ctx context.Context, event *nostr.Event, relayIDs []int) []PublishResult {
+	db := database.Get()
+
+	var results []PublishResult
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// If no relay IDs specified, publish to all connected
+	if len(relayIDs) == 0 {
+		clients := rm.GetConnectedClients()
+		for _, client := range clients {
+			wg.Add(1)
+			go func(c *Client) {
+				defer wg.Done()
+				result := PublishResult{
+					RelayURL: c.URL(),
+					Success:  true,
+				}
+				if err := c.Publish(ctx, event); err != nil {
+					result.Success = false
+					result.Error = err.Error()
+					log.Error().Err(err).Str("url", c.URL()).Msg("Failed to publish event")
+				} else {
+					log.Info().Str("url", c.URL()).Msg("Published event to relay")
+				}
+				mu.Lock()
+				results = append(results, result)
+				mu.Unlock()
+			}(client)
+		}
+	} else {
+		// Publish to specific relays by ID
+		for _, relayID := range relayIDs {
+			// Get relay URL from database
+			var url string
+			if db != nil {
+				row := db.QueryRow("SELECT url FROM relays WHERE id = ?", relayID)
+				if err := row.Scan(&url); err != nil {
+					results = append(results, PublishResult{
+						RelayID: relayID,
+						Success: false,
+						Error:   "relay not found",
+					})
+					continue
+				}
+			}
+
+			rm.mu.RLock()
+			client, exists := rm.clients[url]
+			rm.mu.RUnlock()
+
+			if !exists || client == nil {
+				results = append(results, PublishResult{
+					RelayID:  relayID,
+					RelayURL: url,
+					Success:  false,
+					Error:    "relay not loaded",
+				})
+				continue
+			}
+
+			if !client.IsConnected() {
+				results = append(results, PublishResult{
+					RelayID:  relayID,
+					RelayURL: url,
+					Success:  false,
+					Error:    "relay not connected",
+				})
+				continue
+			}
+
+			wg.Add(1)
+			go func(id int, c *Client) {
+				defer wg.Done()
+				result := PublishResult{
+					RelayID:  id,
+					RelayURL: c.URL(),
+					Success:  true,
+				}
+				if err := c.Publish(ctx, event); err != nil {
+					result.Success = false
+					result.Error = err.Error()
+					log.Error().Err(err).Str("url", c.URL()).Msg("Failed to publish event")
+				} else {
+					log.Info().Str("url", c.URL()).Msg("Published event to relay")
+				}
+				mu.Lock()
+				results = append(results, result)
+				mu.Unlock()
+			}(relayID, client)
+		}
+	}
+
+	wg.Wait()
+	return results
+}
+
 // updateRelayStatus updates the relay status in the database
 func (rm *RelayManager) updateRelayStatus(url, status string) {
 	db := database.Get()
