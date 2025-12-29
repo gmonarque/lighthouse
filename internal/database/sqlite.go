@@ -28,14 +28,17 @@ func Init(dbPath string) error {
 	}
 
 	var err error
-	db, err = sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=ON&_busy_timeout=5000")
+	// WAL mode allows concurrent reads during writes
+	// Increase busy timeout to 30 seconds to prevent blocking
+	// cache=shared enables shared cache for better concurrency
+	db, err = sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_foreign_keys=ON&_busy_timeout=30000&cache=shared&_synchronous=NORMAL")
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Set connection pool settings
-	db.SetMaxOpenConns(1) // SQLite handles concurrency via WAL
-	db.SetMaxIdleConns(1)
+	// Allow multiple connections for concurrent reads
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
 
 	// Test connection
 	if err := db.Ping(); err != nil {
