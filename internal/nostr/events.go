@@ -19,6 +19,7 @@ type TorrentEvent struct {
 	Size        int64
 	Category    string
 	Files       []TorrentFile
+	Trackers    []string          // Tracker URLs from the event
 	Tags        map[string]string
 	ContentTags []string // t tags for content classification (movie, tv, 4k, hd, etc.)
 	Description string   // Event content if not a magnet URI, or from summary tag
@@ -43,6 +44,7 @@ func ParseTorrentEvent(event *nostr.Event) (*TorrentEvent, error) {
 		Tags:        make(map[string]string),
 		ContentTags: make([]string, 0),
 		Files:       make([]TorrentFile, 0),
+		Trackers:    make([]string, 0),
 	}
 
 	// Check if content is a magnet URI or description
@@ -85,6 +87,11 @@ func ParseTorrentEvent(event *nostr.Event) (*TorrentEvent, error) {
 				}
 			}
 			te.Files = append(te.Files, file)
+		case "tracker":
+			// NIP-35 tracker tag: ["tracker", "url"]
+			if value != "" {
+				te.Trackers = append(te.Trackers, value)
+			}
 		case "summary":
 			// Some events use summary tag for description
 			if te.Description == "" {
@@ -116,7 +123,7 @@ func ParseTorrentEvent(event *nostr.Event) (*TorrentEvent, error) {
 	// Generate magnet URI if we have info hash but no magnet URI
 	// Per https://en.wikipedia.org/wiki/Magnet_URI_scheme
 	if te.MagnetURI == "" && te.InfoHash != "" {
-		te.MagnetURI = buildMagnetURI(te.InfoHash, te.Name, te.Size)
+		te.MagnetURI = buildMagnetURI(te.InfoHash, te.Name, te.Size, te.Trackers)
 	}
 
 	return te, nil
@@ -171,9 +178,9 @@ func extractNameFromMagnet(magnetURI string) string {
 	return ""
 }
 
-// buildMagnetURI constructs a magnet URI from info hash, name, and size
+// buildMagnetURI constructs a magnet URI from info hash, name, size, and trackers
 // Per https://en.wikipedia.org/wiki/Magnet_URI_scheme
-func buildMagnetURI(infoHash, name string, size int64) string {
+func buildMagnetURI(infoHash, name string, size int64, eventTrackers []string) string {
 	// Start with the required xt (exact topic) parameter
 	magnet := "magnet:?xt=urn:btih:" + strings.ToLower(infoHash)
 
@@ -192,16 +199,20 @@ func buildMagnetURI(infoHash, name string, size int64) string {
 		magnet += "&xl=" + strconv.FormatInt(size, 10)
 	}
 
-	// Add common public trackers for better connectivity
-	trackers := []string{
-		"udp://tracker.opentrackr.org:1337/announce",
-		"udp://open.stealth.si:80/announce",
-		"udp://tracker.torrent.eu.org:451/announce",
-		"udp://tracker.bittor.pw:1337/announce",
-		"udp://public.popcorn-tracker.org:6969/announce",
-		"udp://tracker.dler.org:6969/announce",
-		"udp://exodus.desync.com:6969",
-		"udp://open.demonii.com:1337/announce",
+	// Use trackers from event if provided, otherwise use defaults
+	trackers := eventTrackers
+	if len(trackers) == 0 {
+		// Default public trackers for better connectivity
+		trackers = []string{
+			"udp://tracker.opentrackr.org:1337/announce",
+			"udp://open.stealth.si:80/announce",
+			"udp://tracker.torrent.eu.org:451/announce",
+			"udp://tracker.bittor.pw:1337/announce",
+			"udp://public.popcorn-tracker.org:6969/announce",
+			"udp://tracker.dler.org:6969/announce",
+			"udp://exodus.desync.com:6969",
+			"udp://open.demonii.com:1337/announce",
+		}
 	}
 
 	for _, tr := range trackers {
