@@ -9,7 +9,7 @@ This software is a Nostr protocol indexer that reads publicly available NIP-35 e
 ## What it does
 
 - Indexes NIP-35 (Kind 2003) events from Nostr relays
-- Publish events to Nostr relays (import from .torrent file or manual entry)
+- Publish metadata events to Nostr relays (parses .torrent file headers only)
 - Filter what is indexed based on tags
 - Web of Trust filtering - only see content from people you trust
 - Torznab API for seamless *arr apps integration
