@@ -347,22 +347,22 @@
 						</div>
 
 						<div>
-							<label class="label" for="category">Category</label>
+							<label class="label" for="category">Torznab Category</label>
 							<div class="flex gap-2">
 								<select id="category" bind:value={category} class="input flex-1" disabled={!!customCategory}>
 									{#each categoryOptions as cat}
-										<option value={cat.value}>{cat.label}</option>
+										<option value={cat.value}>{cat.label} ({cat.value})</option>
 									{/each}
 								</select>
 								<input
 									type="number"
 									bind:value={customCategory}
-									placeholder="Custom"
-									class="input w-24"
+									placeholder="Custom code"
+									class="input w-40"
 									min="1"
 								/>
 							</div>
-							<p class="text-xs text-surface-500 mt-1">Enter custom category code or select preset</p>
+							<p class="text-xs text-surface-500 mt-1">Torznab category code for *arr apps compatibility</p>
 						</div>
 					</div>
 
