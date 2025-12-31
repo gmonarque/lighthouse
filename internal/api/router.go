@@ -6,12 +6,12 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gmonarque/lighthouse/internal/api/handlers"
+	apiMiddleware "github.com/gmonarque/lighthouse/internal/api/middleware"
+	"github.com/gmonarque/lighthouse/internal/config"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	"github.com/lighthouse-client/lighthouse/internal/api/handlers"
-	apiMiddleware "github.com/lighthouse-client/lighthouse/internal/api/middleware"
-	"github.com/lighthouse-client/lighthouse/internal/config"
 	"github.com/rs/zerolog/log"
 )
 
@@ -28,6 +28,9 @@ func NewRouter(cfg *config.Config) *chi.Mux {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
+
+	// Rate limiting by IP (applies to all requests)
+	r.Use(apiMiddleware.RateLimitByIP)
 
 	// CORS configuration
 	r.Use(cors.Handler(cors.Options{
@@ -46,8 +49,8 @@ func NewRouter(cfg *config.Config) *chi.Mux {
 	r.Route("/api", func(r chi.Router) {
 		// Public endpoints (no auth required)
 		r.Group(func(r chi.Router) {
-			// Torznab API - uses query param apikey
-			r.Get("/torznab", handlers.Torznab)
+			// Torznab API - uses query param apikey with stricter rate limit
+			r.With(apiMiddleware.RateLimitTorznab).Get("/torznab", handlers.Torznab)
 
 			// Setup wizard - public for first run
 			r.Get("/setup/status", handlers.GetSetupStatus)
@@ -62,6 +65,7 @@ func NewRouter(cfg *config.Config) *chi.Mux {
 		// Protected API endpoints
 		r.Group(func(r chi.Router) {
 			r.Use(apiMiddleware.APIKeyAuth)
+			r.Use(apiMiddleware.RateLimitByAPIKey)
 
 			// Stats & Dashboard
 			r.Get("/stats", handlers.GetStats)
@@ -78,6 +82,8 @@ func NewRouter(cfg *config.Config) *chi.Mux {
 				r.Get("/whitelist", handlers.GetWhitelist)
 				r.Post("/whitelist", handlers.AddToWhitelist)
 				r.Delete("/whitelist/{npub}", handlers.RemoveFromWhitelist)
+				r.Post("/whitelist/{npub}/discover-relays", handlers.DiscoverUserRelays)
+				r.Post("/whitelist/discover-all-relays", handlers.DiscoverAllTrustedRelays)
 
 				r.Get("/blacklist", handlers.GetBlacklist)
 				r.Post("/blacklist", handlers.AddToBlacklist)
@@ -85,7 +91,62 @@ func NewRouter(cfg *config.Config) *chi.Mux {
 
 				r.Get("/settings", handlers.GetTrustSettings)
 				r.Put("/settings", handlers.UpdateTrustSettings)
+
+				// Curator management (federated trust)
+				r.Get("/curators", handlers.GetCurators)
+				r.Post("/curators", handlers.AddCurator)
+				r.Put("/curators/{pubkey}", handlers.UpdateCurator)
+				r.Delete("/curators/{pubkey}", handlers.RevokeCurator)
+
+				// Trust policy
+				r.Get("/policy", handlers.GetTrustPolicy)
+
+				// Aggregation policy
+				r.Get("/aggregation", handlers.GetAggregationPolicy)
+				r.Put("/aggregation", handlers.UpdateAggregationPolicy)
 			})
+
+			// Rulesets management
+			r.Route("/rulesets", func(r chi.Router) {
+				r.Get("/", handlers.GetRulesets)
+				r.Get("/active", handlers.GetActiveRulesets)
+				r.Get("/{id}", handlers.GetRuleset)
+				r.Post("/", handlers.ImportRuleset)
+				r.Post("/{id}/activate", handlers.ActivateRuleset)
+				r.Post("/{id}/deactivate", handlers.DeactivateRuleset)
+				r.Delete("/{id}", handlers.DeleteRuleset)
+			})
+
+			// Verification decisions
+			r.Route("/decisions", func(r chi.Router) {
+				r.Get("/", handlers.GetDecisions)
+				r.Get("/stats", handlers.GetDecisionStats)
+				r.Get("/reason-codes", handlers.GetReasonCodes)
+				r.Get("/infohash/{infohash}", handlers.GetDecisionsByInfohash)
+			})
+
+			// Reports & Appeals
+			r.Route("/reports", func(r chi.Router) {
+				r.Get("/", handlers.GetReports)
+				r.Get("/pending", handlers.GetPendingReports)
+				r.Get("/{id}", handlers.GetReport)
+				r.Post("/", handlers.SubmitReport)
+				r.Put("/{id}", handlers.UpdateReport)
+				r.Post("/{id}/acknowledge", handlers.AcknowledgeReport)
+			})
+
+			// Comments
+			r.Route("/comments", func(r chi.Router) {
+				r.Get("/recent", handlers.GetRecentComments)
+				r.Get("/{eventId}", handlers.GetComment)
+				r.Get("/{eventId}/thread", handlers.GetCommentThread)
+				r.Delete("/{eventId}", handlers.DeleteComment)
+			})
+
+			// Torrent-specific comments
+			r.Get("/torrents/{infohash}/comments", handlers.GetCommentsByInfohash)
+			r.Post("/torrents/{infohash}/comments", handlers.AddComment)
+			r.Get("/torrents/{infohash}/comments/stats", handlers.GetCommentStats)
 
 			// Relay management
 			r.Route("/relays", func(r chi.Router) {
@@ -109,9 +170,29 @@ func NewRouter(cfg *config.Config) *chi.Mux {
 			r.Get("/activity", handlers.GetActivity)
 			r.Get("/logs", handlers.GetLogs)
 
+			// Explorer stats
+			r.Get("/explorer/stats", handlers.GetExplorerStats)
+
+			// SLA monitoring
+			r.Get("/sla/status", handlers.GetSLAStatus)
+			r.Get("/sla/history", handlers.GetSLAHistory)
+
+			// API Keys management
+			r.Route("/apikeys", func(r chi.Router) {
+				r.Get("/", handlers.GetAPIKeys)
+				r.Post("/", handlers.CreateAPIKey)
+				r.Get("/permissions", handlers.GetAvailablePermissions)
+				r.Get("/{id}", handlers.GetAPIKeyByID)
+				r.Put("/{id}", handlers.UpdateAPIKey)
+				r.Delete("/{id}", handlers.DeleteAPIKey)
+				r.Post("/{id}/enable", handlers.EnableAPIKey)
+				r.Post("/{id}/disable", handlers.DisableAPIKey)
+			})
+
 			// Indexer control
 			r.Post("/indexer/start", handlers.StartIndexer)
 			r.Post("/indexer/stop", handlers.StopIndexer)
+			r.Post("/indexer/resync", handlers.ResyncIndexer)
 			r.Get("/indexer/status", handlers.GetIndexerStatus)
 
 			// Publish torrent

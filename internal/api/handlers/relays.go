@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/gmonarque/lighthouse/internal/database"
 	"github.com/go-chi/chi/v5"
-	"github.com/lighthouse-client/lighthouse/internal/database"
 )
 
 // GetRelays returns all configured relays

@@ -254,7 +254,7 @@
 
 <!-- Add Relay Modal -->
 {#if showAddRelay}
-	<div class="modal-backdrop" onclick={() => (showAddRelay = false)}></div>
+	<div class="modal-backdrop" onclick={() => (showAddRelay = false)} onkeydown={(e) => e.key === 'Escape' && (showAddRelay = false)} role="button" tabindex="-1"></div>
 	<div class="modal">
 		<div class="modal-header">
 			<h2 class="text-lg font-semibold text-white">Add Relay</h2>
@@ -283,8 +283,8 @@
 					class="input"
 				/>
 			</div>
-			<div>
-				<label class="label">Preset</label>
+			<fieldset>
+				<legend class="label">Preset</legend>
 				<div class="space-y-2">
 					{#each presets as preset}
 						<label class="flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors {newRelayPreset === preset.value ? 'border-primary-500 bg-primary-900/20' : 'border-surface-700 hover:border-surface-600'}">
@@ -302,7 +302,7 @@
 						</label>
 					{/each}
 				</div>
-			</div>
+			</fieldset>
 		</div>
 		<div class="modal-footer">
 			<button class="btn-secondary" onclick={() => (showAddRelay = false)}>Cancel</button>

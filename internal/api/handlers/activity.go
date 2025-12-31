@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/lighthouse-client/lighthouse/internal/database"
+	"github.com/gmonarque/lighthouse/internal/database"
 )
 
 // GetActivity returns recent activity logs

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/lighthouse-client/lighthouse/internal/config"
+	"github.com/gmonarque/lighthouse/internal/config"
 )
 
 // GetAPIKey returns the API key to the frontend for authentication

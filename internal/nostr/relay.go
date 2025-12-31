@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lighthouse-client/lighthouse/internal/config"
-	"github.com/lighthouse-client/lighthouse/internal/database"
+	"github.com/gmonarque/lighthouse/internal/config"
+	"github.com/gmonarque/lighthouse/internal/database"
 	"github.com/nbd-wtf/go-nostr"
 	"github.com/rs/zerolog/log"
 )
@@ -22,6 +22,7 @@ const (
 	KindMetadata    = 0
 	KindTextNote    = 1
 	KindContactList = 3
+	KindRelayList   = 10002 // NIP-65 relay list
 	KindTorrent     = 2003
 )
 
@@ -57,6 +58,11 @@ func (rm *RelayManager) Start(ctx context.Context) error {
 
 	// Connect to all relays concurrently
 	var wg sync.WaitGroup
+	var connectedCount int
+	var mu sync.Mutex
+
+	log.Info().Int("total_relays", len(rm.clients)).Msg("Connecting to relays...")
+
 	for url, client := range rm.clients {
 		wg.Add(1)
 		go func(url string, c *Client) {
@@ -65,13 +71,17 @@ func (rm *RelayManager) Start(ctx context.Context) error {
 				log.Error().Err(err).Str("url", url).Msg("Failed to connect to relay")
 				rm.updateRelayStatus(url, "error")
 			} else {
+				log.Info().Str("url", url).Msg("Connected to relay")
 				rm.updateRelayStatus(url, "connected")
+				mu.Lock()
+				connectedCount++
+				mu.Unlock()
 			}
 		}(url, client)
 	}
 
 	wg.Wait()
-	log.Info().Int("count", len(rm.clients)).Msg("Relay manager started")
+	log.Info().Int("connected", connectedCount).Int("total", len(rm.clients)).Msg("Relay manager started")
 	return nil
 }
 
@@ -175,6 +185,7 @@ func (rm *RelayManager) SubscribeAll(ctx context.Context, filters []nostr.Filter
 		return errors.New("no connected relays")
 	}
 
+	successCount := 0
 	for _, client := range clients {
 		url := client.URL()
 		err := client.Subscribe(ctx, filters, func(event *nostr.Event) {
@@ -182,9 +193,13 @@ func (rm *RelayManager) SubscribeAll(ctx context.Context, filters []nostr.Filter
 		})
 		if err != nil {
 			log.Error().Err(err).Str("url", url).Msg("Failed to subscribe")
+		} else {
+			successCount++
+			log.Info().Str("url", url).Msg("Subscribed to relay")
 		}
 	}
 
+	log.Info().Int("subscribed", successCount).Int("total_connected", len(clients)).Msg("Subscription complete")
 	return nil
 }
 
@@ -197,6 +212,26 @@ func (rm *RelayManager) SubscribeTorrents(ctx context.Context, since time.Time, 
 			Since: &timestamp,
 		},
 	}
+
+	return rm.SubscribeAll(ctx, filters, handler)
+}
+
+// SubscribeTrustedTorrents subscribes to torrent events from specific authors (trusted uploaders)
+// This is more efficient than fetching all events because relays return ALL events from these authors
+func (rm *RelayManager) SubscribeTrustedTorrents(ctx context.Context, pubkeys []string, handler func(*nostr.Event, string)) error {
+	if len(pubkeys) == 0 {
+		return errors.New("no pubkeys provided")
+	}
+
+	// Query for all historical events from trusted authors (no time limit)
+	filters := []nostr.Filter{
+		{
+			Kinds:   []int{KindTorrent},
+			Authors: pubkeys,
+		},
+	}
+
+	log.Info().Int("authors", len(pubkeys)).Msg("Subscribing to torrents from trusted authors")
 
 	return rm.SubscribeAll(ctx, filters, handler)
 }
@@ -441,4 +476,177 @@ func (rm *RelayManager) LoadRelaysFromDB() error {
 
 	log.Info().Int("total_relays", len(rm.clients)).Msg("Loaded relays from database")
 	return nil
+}
+
+// RelayListEntry represents a relay from NIP-65 relay list
+type RelayListEntry struct {
+	URL   string
+	Read  bool
+	Write bool
+}
+
+// FetchRelayList fetches NIP-65 relay list for a pubkey
+func (rm *RelayManager) FetchRelayList(ctx context.Context, pubkey string) ([]RelayListEntry, error) {
+	clients := rm.GetConnectedClients()
+
+	log.Debug().Str("pubkey", pubkey[:16]+"...").Int("connected_relays", len(clients)).Msg("Fetching NIP-65 relay list")
+
+	filters := []nostr.Filter{
+		{
+			Kinds:   []int{KindRelayList},
+			Authors: []string{pubkey},
+			Limit:   1,
+		},
+	}
+
+	// Helper function to parse relay list from event
+	parseRelayList := func(event *nostr.Event) []RelayListEntry {
+		var relays []RelayListEntry
+		for _, tag := range event.Tags {
+			if len(tag) < 2 || tag[0] != "r" {
+				continue
+			}
+
+			entry := RelayListEntry{URL: tag[1], Read: true, Write: true}
+
+			// Check for read/write marker
+			if len(tag) >= 3 {
+				switch tag[2] {
+				case "read":
+					entry.Write = false
+				case "write":
+					entry.Read = false
+				}
+			}
+
+			relays = append(relays, entry)
+		}
+		return relays
+	}
+
+	// Try connected relays first
+	for _, client := range clients {
+		queryCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		events, err := client.QueryEvents(queryCtx, filters)
+		cancel()
+
+		if err != nil {
+			log.Debug().Err(err).Str("relay", client.url).Msg("Failed to query relay for NIP-65")
+			continue
+		}
+
+		if len(events) == 0 {
+			continue
+		}
+
+		relays := parseRelayList(events[0])
+		if len(relays) > 0 {
+			log.Info().Str("pubkey", pubkey[:16]+"...").Int("relays", len(relays)).Msg("Fetched user relay list")
+			return relays, nil
+		}
+	}
+
+	// Fallback: try well-known indexing relays that might have the data
+	fallbackRelays := []string{
+		"wss://relay.nostr.band",
+		"wss://purplepag.es",
+		"wss://relay.damus.io",
+	}
+
+	for _, relayURL := range fallbackRelays {
+		// Skip if already in connected clients
+		found := false
+		for _, c := range clients {
+			if c.url == relayURL {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+
+		log.Debug().Str("relay", relayURL).Msg("Trying fallback relay for NIP-65")
+
+		// Create temporary client
+		tempClient := NewClient(relayURL)
+		connectCtx, connectCancel := context.WithTimeout(ctx, 3*time.Second)
+		err := tempClient.Connect(connectCtx)
+		connectCancel()
+
+		if err != nil {
+			log.Debug().Err(err).Str("relay", relayURL).Msg("Failed to connect to fallback relay")
+			continue
+		}
+
+		queryCtx, queryCancel := context.WithTimeout(ctx, 3*time.Second)
+		events, err := tempClient.QueryEvents(queryCtx, filters)
+		queryCancel()
+		tempClient.Disconnect()
+
+		if err != nil || len(events) == 0 {
+			continue
+		}
+
+		relays := parseRelayList(events[0])
+		if len(relays) > 0 {
+			log.Info().Str("pubkey", pubkey[:16]+"...").Int("relays", len(relays)).Str("source", relayURL).Msg("Fetched user relay list from fallback")
+			return relays, nil
+		}
+	}
+
+	return nil, errors.New("user has no NIP-65 relay list published")
+}
+
+// DiscoverAndAddUserRelays discovers a user's relays and adds their write relays
+func (rm *RelayManager) DiscoverAndAddUserRelays(ctx context.Context, npub string) (int, error) {
+	// Convert npub to hex
+	pubkey, err := NpubToHex(npub)
+	if err != nil {
+		return 0, err
+	}
+
+	relays, err := rm.FetchRelayList(ctx, pubkey)
+	if err != nil {
+		return 0, err
+	}
+
+	added := 0
+	db := database.Get()
+
+	for _, relay := range relays {
+		// Only add write relays (where they publish)
+		if !relay.Write {
+			continue
+		}
+
+		// Check if already exists
+		rm.mu.RLock()
+		_, exists := rm.clients[relay.URL]
+		rm.mu.RUnlock()
+
+		if exists {
+			continue
+		}
+
+		// Add to database
+		if db != nil {
+			_, err := db.Exec(`
+				INSERT OR IGNORE INTO relays (url, name, preset, enabled, status)
+				VALUES (?, ?, 'discovered', TRUE, 'disconnected')
+			`, relay.URL, "Discovered")
+			if err != nil {
+				log.Error().Err(err).Str("url", relay.URL).Msg("Failed to add discovered relay to DB")
+				continue
+			}
+		}
+
+		// Add to manager and connect
+		if err := rm.AddRelay(relay.URL); err == nil {
+			added++
+			log.Info().Str("url", relay.URL).Msg("Added discovered relay")
+		}
+	}
+
+	return added, nil
 }

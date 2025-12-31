@@ -5,9 +5,10 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/gmonarque/lighthouse/internal/database"
+	"github.com/gmonarque/lighthouse/internal/nostr"
+	"github.com/gmonarque/lighthouse/internal/trust"
 	"github.com/go-chi/chi/v5"
-	"github.com/lighthouse-client/lighthouse/internal/database"
-	"github.com/lighthouse-client/lighthouse/internal/nostr"
 )
 
 // Search performs full-text search on torrents
@@ -44,19 +45,76 @@ func Search(w http.ResponseWriter, r *http.Request) {
 
 	db := database.Get()
 
+	// Get trusted uploaders for filtering
+	wot := trust.NewWebOfTrust()
+	trustedUploaders, err := wot.GetTrustedUploaders()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to get trusted uploaders")
+		return
+	}
+
+	// Build trust filter subquery
+	// If no trusted uploaders, return empty results
+	if len(trustedUploaders) == 0 {
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"results": []interface{}{},
+			"total":   0,
+			"limit":   limit,
+			"offset":  offset,
+		})
+		return
+	}
+
+	// Convert npubs to hex pubkeys for matching (uploads are stored as hex)
+	var trustedHexPubkeys []string
+	for _, npubOrHex := range trustedUploaders {
+		// Try to convert from npub to hex
+		if hexPk, err := nostr.NpubToHex(npubOrHex); err == nil {
+			trustedHexPubkeys = append(trustedHexPubkeys, hexPk)
+		} else {
+			// Already hex or invalid, use as-is
+			trustedHexPubkeys = append(trustedHexPubkeys, npubOrHex)
+		}
+	}
+
+	// If no valid pubkeys after conversion, return empty
+	if len(trustedHexPubkeys) == 0 {
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"results": []interface{}{},
+			"total":   0,
+			"limit":   limit,
+			"offset":  offset,
+		})
+		return
+	}
+
+	// Build placeholders for IN clause
+	trustPlaceholders := "("
+	trustArgs := make([]interface{}, len(trustedHexPubkeys))
+	for i, u := range trustedHexPubkeys {
+		if i > 0 {
+			trustPlaceholders += ","
+		}
+		trustPlaceholders += "?"
+		trustArgs[i] = u
+	}
+	trustPlaceholders += ")"
+
 	var rows *sql.Rows
-	var err error
 
 	if query != "" {
-		// Full-text search
+		// Full-text search with trust filtering
 		sqlQuery := `
-			SELECT t.id, t.info_hash, t.name, t.size, t.category, t.seeders, t.leechers,
+			SELECT DISTINCT t.id, t.info_hash, t.name, t.size, t.category, t.seeders, t.leechers,
 				   t.magnet_uri, t.title, t.year, t.poster_url, t.overview, t.trust_score, t.first_seen_at
 			FROM torrents t
 			JOIN torrents_fts fts ON t.id = fts.rowid
+			JOIN torrent_uploads tu ON t.id = tu.torrent_id
 			WHERE torrents_fts MATCH ?
-		`
+			AND tu.uploader_npub IN ` + trustPlaceholders
+
 		args := []interface{}{query}
+		args = append(args, trustArgs...)
 
 		if category != "" {
 			if isBaseCategory {
@@ -75,28 +133,29 @@ func Search(w http.ResponseWriter, r *http.Request) {
 
 		rows, err = db.Query(sqlQuery, args...)
 	} else {
-		// List all (no search query)
+		// List all (no search query) with trust filtering
 		sqlQuery := `
-			SELECT id, info_hash, name, size, category, seeders, leechers,
-				   magnet_uri, title, year, poster_url, overview, trust_score, first_seen_at
-			FROM torrents
-			WHERE 1=1
-		`
-		args := []interface{}{}
+			SELECT DISTINCT t.id, t.info_hash, t.name, t.size, t.category, t.seeders, t.leechers,
+				   t.magnet_uri, t.title, t.year, t.poster_url, t.overview, t.trust_score, t.first_seen_at
+			FROM torrents t
+			JOIN torrent_uploads tu ON t.id = tu.torrent_id
+			WHERE tu.uploader_npub IN ` + trustPlaceholders
+
+		args := append([]interface{}{}, trustArgs...)
 
 		if category != "" {
 			if isBaseCategory {
 				// Match all subcategories within the base category range
-				sqlQuery += " AND category >= ? AND category < ?"
+				sqlQuery += " AND t.category >= ? AND t.category < ?"
 				args = append(args, categoryNum, categoryNum+1000)
 			} else {
 				// Exact match for subcategory
-				sqlQuery += " AND category = ?"
+				sqlQuery += " AND t.category = ?"
 				args = append(args, categoryNum)
 			}
 		}
 
-		sqlQuery += " ORDER BY trust_score DESC, first_seen_at DESC LIMIT ? OFFSET ?"
+		sqlQuery += " ORDER BY t.trust_score DESC, t.first_seen_at DESC LIMIT ? OFFSET ?"
 		args = append(args, limit, offset)
 
 		rows, err = db.Query(sqlQuery, args...)
@@ -140,15 +199,18 @@ func Search(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Get total count for pagination
+	// Get total count for pagination (with same trust filtering)
 	var total int64
 	if query != "" {
 		countQuery := `
-			SELECT COUNT(*) FROM torrents t
+			SELECT COUNT(DISTINCT t.id) FROM torrents t
 			JOIN torrents_fts fts ON t.id = fts.rowid
+			JOIN torrent_uploads tu ON t.id = tu.torrent_id
 			WHERE torrents_fts MATCH ?
-		`
+			AND tu.uploader_npub IN ` + trustPlaceholders
+
 		countArgs := []interface{}{query}
+		countArgs = append(countArgs, trustArgs...)
 		if category != "" {
 			if isBaseCategory {
 				countQuery += " AND t.category >= ? AND t.category < ?"
@@ -160,14 +222,18 @@ func Search(w http.ResponseWriter, r *http.Request) {
 		}
 		db.QueryRow(countQuery, countArgs...).Scan(&total)
 	} else {
-		countQuery := "SELECT COUNT(*) FROM torrents WHERE 1=1"
-		countArgs := []interface{}{}
+		countQuery := `
+			SELECT COUNT(DISTINCT t.id) FROM torrents t
+			JOIN torrent_uploads tu ON t.id = tu.torrent_id
+			WHERE tu.uploader_npub IN ` + trustPlaceholders
+
+		countArgs := append([]interface{}{}, trustArgs...)
 		if category != "" {
 			if isBaseCategory {
-				countQuery += " AND category >= ? AND category < ?"
+				countQuery += " AND t.category >= ? AND t.category < ?"
 				countArgs = append(countArgs, categoryNum, categoryNum+1000)
 			} else {
-				countQuery += " AND category = ?"
+				countQuery += " AND t.category = ?"
 				countArgs = append(countArgs, categoryNum)
 			}
 		}
@@ -206,28 +272,28 @@ func GetTorrent(w http.ResponseWriter, r *http.Request) {
 	`, id)
 
 	var torrent struct {
-		ID           int64
-		InfoHash     string
-		Name         string
-		Size         sql.NullInt64
-		Category     sql.NullInt64
-		Seeders      sql.NullInt64
-		Leechers     sql.NullInt64
-		MagnetURI    string
-		Files        sql.NullString
-		Title        sql.NullString
-		Year         sql.NullInt64
-		TmdbID       sql.NullInt64
-		ImdbID       sql.NullString
-		PosterURL    sql.NullString
-		BackdropURL  sql.NullString
-		Overview     sql.NullString
-		Genres       sql.NullString
-		Rating       sql.NullFloat64
-		TrustScore   int64
-		UploadCount  int64
-		FirstSeenAt  string
-		UpdatedAt    string
+		ID          int64
+		InfoHash    string
+		Name        string
+		Size        sql.NullInt64
+		Category    sql.NullInt64
+		Seeders     sql.NullInt64
+		Leechers    sql.NullInt64
+		MagnetURI   string
+		Files       sql.NullString
+		Title       sql.NullString
+		Year        sql.NullInt64
+		TmdbID      sql.NullInt64
+		ImdbID      sql.NullString
+		PosterURL   sql.NullString
+		BackdropURL sql.NullString
+		Overview    sql.NullString
+		Genres      sql.NullString
+		Rating      sql.NullFloat64
+		TrustScore  int64
+		UploadCount int64
+		FirstSeenAt string
+		UpdatedAt   string
 	}
 
 	if err := row.Scan(

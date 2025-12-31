@@ -17,6 +17,8 @@ type Config struct {
 	Trust      TrustConfig      `mapstructure:"trust"`
 	Enrichment EnrichmentConfig `mapstructure:"enrichment"`
 	Indexer    IndexerConfig    `mapstructure:"indexer"`
+	Curator    CuratorConfig    `mapstructure:"curator"`
+	Relay      RelayServerConfig `mapstructure:"relay"`
 }
 
 type ServerConfig struct {
@@ -61,8 +63,36 @@ type IndexerConfig struct {
 	// If empty, all torrents are indexed. If set, only torrents with at least
 	// one matching tag will be indexed.
 	// Example: ["movie", "tv"] - only index movies and TV shows
-	TagFilter       []string `mapstructure:"tag_filter"`
-	TagFilterEnabled bool    `mapstructure:"tag_filter_enabled"`
+	TagFilter        []string `mapstructure:"tag_filter"`
+	TagFilterEnabled bool     `mapstructure:"tag_filter_enabled"`
+}
+
+type CuratorConfig struct {
+	// Enabled enables the local curator module
+	Enabled bool `mapstructure:"enabled"`
+	// Mode: "local" (curate locally), "remote" (consume external decisions), "hybrid" (both)
+	Mode string `mapstructure:"mode"`
+	// AggregationMode: "any", "all", "quorum", "weighted"
+	AggregationMode string `mapstructure:"aggregation_mode"`
+	// QuorumRequired for quorum mode
+	QuorumRequired int `mapstructure:"quorum_required"`
+	// RejectThreshold for semantic rules (0.0-1.0)
+	RejectThreshold float64 `mapstructure:"reject_threshold"`
+}
+
+type RelayServerConfig struct {
+	// Enabled enables the relay server module
+	Enabled bool `mapstructure:"enabled"`
+	// Listen address for the relay WebSocket server
+	Listen string `mapstructure:"listen"`
+	// Mode: "public" or "community"
+	Mode string `mapstructure:"mode"`
+	// RequireCuration only accept curated content
+	RequireCuration bool `mapstructure:"require_curation"`
+	// SyncWith list of relays to sync with
+	SyncWith []string `mapstructure:"sync_with"`
+	// EnableDiscovery enable relay discovery via Nostr
+	EnableDiscovery bool `mapstructure:"enable_discovery"`
 }
 
 var cfg *Config
@@ -159,6 +189,21 @@ func setDefaults() {
 	// Indexer defaults
 	viper.SetDefault("indexer.tag_filter", []string{})
 	viper.SetDefault("indexer.tag_filter_enabled", false)
+
+	// Curator defaults
+	viper.SetDefault("curator.enabled", false)
+	viper.SetDefault("curator.mode", "local")
+	viper.SetDefault("curator.aggregation_mode", "any")
+	viper.SetDefault("curator.quorum_required", 1)
+	viper.SetDefault("curator.reject_threshold", 0.7)
+
+	// Relay server defaults
+	viper.SetDefault("relay.enabled", false)
+	viper.SetDefault("relay.listen", "0.0.0.0:9998")
+	viper.SetDefault("relay.mode", "community")
+	viper.SetDefault("relay.require_curation", true)
+	viper.SetDefault("relay.sync_with", []string{})
+	viper.SetDefault("relay.enable_discovery", false)
 }
 
 func createDefaultConfig() error {
@@ -190,7 +235,11 @@ func Save() error {
 // Update updates a configuration value and saves
 func Update(key string, value interface{}) error {
 	viper.Set(key, value)
-	return Save()
+	if err := Save(); err != nil {
+		return err
+	}
+	// Reload the in-memory config to reflect the change
+	return viper.Unmarshal(cfg)
 }
 
 // IsFirstRun returns true if this is the first run (no identity configured)

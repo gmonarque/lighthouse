@@ -22,10 +22,14 @@
 		Copy,
 		FileText,
 		ChevronDown,
-		ChevronUp
+		ChevronUp,
+		MessageSquare,
+		Star,
+		Send,
+		Flag
 	} from 'lucide-svelte';
 	import { api } from '$lib/api/client';
-	import type { TorrentSummary, TorrentDetail } from '$lib/api/client';
+	import type { TorrentSummary, TorrentDetail, Comment, CommentStats } from '$lib/api/client';
 
 	interface TorrentFile {
 		name: string;
@@ -51,6 +55,30 @@
 	let selectedTorrent: TorrentDetail | null = null;
 	let showFilters = false;
 	let showAllFiles = false;
+
+	// Comments state
+	let comments: Comment[] = [];
+	let commentStats: CommentStats | null = null;
+	let loadingComments = false;
+	let showComments = false;
+	let newCommentContent = '';
+	let newCommentRating = 0;
+
+	// Report state
+	let showReportForm = false;
+	let reportCategory = 'spam';
+	let reportEvidence = '';
+	let submittingReport = false;
+
+	const reportCategories = [
+		{ value: 'dmca', label: 'DMCA / Copyright' },
+		{ value: 'illegal', label: 'Illegal Content' },
+		{ value: 'spam', label: 'Spam' },
+		{ value: 'malware', label: 'Malware' },
+		{ value: 'false_info', label: 'False Information' },
+		{ value: 'duplicate', label: 'Duplicate' },
+		{ value: 'other', label: 'Other' }
+	];
 
 	// Parse files from JSON string
 	function parseFiles(filesJson: string | undefined): TorrentFile[] {
@@ -265,6 +293,73 @@
 			performSearch();
 		} catch (error) {
 			addToast('error', 'Failed to block uploader');
+		}
+	}
+
+	async function loadComments(infohash: string) {
+		loadingComments = true;
+		try {
+			const response = await api.getCommentsByInfohash(infohash);
+			comments = response.comments || [];
+			commentStats = response.stats || null;
+		} catch (error) {
+			console.error('Failed to load comments:', error);
+			comments = [];
+			commentStats = null;
+		} finally {
+			loadingComments = false;
+		}
+	}
+
+	async function submitComment() {
+		if (!selectedTorrent || !newCommentContent.trim()) return;
+
+		try {
+			await api.addComment(
+				selectedTorrent.info_hash,
+				newCommentContent,
+				newCommentRating > 0 ? newCommentRating : undefined
+			);
+			addToast('success', 'Comment added');
+			newCommentContent = '';
+			newCommentRating = 0;
+			await loadComments(selectedTorrent.info_hash);
+		} catch (error) {
+			addToast('error', 'Failed to add comment');
+		}
+	}
+
+	function formatCommentDate(dateStr: string): string {
+		const date = new Date(dateStr);
+		const now = new Date();
+		const diff = now.getTime() - date.getTime();
+		const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+
+		if (days === 0) return 'Today';
+		if (days === 1) return 'Yesterday';
+		if (days < 7) return `${days} days ago`;
+		return date.toLocaleDateString();
+	}
+
+	async function submitReport() {
+		if (!selectedTorrent) return;
+
+		submittingReport = true;
+		try {
+			await api.submitReport({
+				kind: 'report',
+				target_infohash: selectedTorrent.info_hash,
+				category: reportCategory,
+				evidence: reportEvidence || undefined
+			});
+			addToast('success', 'Report submitted successfully');
+			showReportForm = false;
+			reportCategory = 'spam';
+			reportEvidence = '';
+		} catch (error) {
+			addToast('error', 'Failed to submit report');
+		} finally {
+			submittingReport = false;
 		}
 	}
 
@@ -529,7 +624,7 @@
 
 <!-- Torrent detail modal -->
 {#if selectedTorrent}
-	<div class="modal-backdrop" onclick={closeTorrent}></div>
+	<div class="modal-backdrop" onclick={closeTorrent} onkeydown={(e) => e.key === 'Escape' && closeTorrent()} role="button" tabindex="-1"></div>
 	<div class="modal max-w-2xl">
 		<div class="modal-header">
 			<h2 class="text-lg font-semibold text-white">
@@ -660,6 +755,166 @@
 					</div>
 				</div>
 			{/if}
+
+			<!-- Comments Section -->
+			<div class="mt-4 pt-4 border-t border-surface-800">
+				<button
+					class="flex items-center justify-between w-full text-left"
+					onclick={() => {
+						showComments = !showComments;
+						if (showComments && selectedTorrent) {
+							loadComments(selectedTorrent.info_hash);
+						}
+					}}
+				>
+					<h3 class="text-sm font-medium text-surface-400 flex items-center gap-2">
+						<MessageSquare class="w-4 h-4" />
+						Comments
+						{#if commentStats}
+							<span class="text-xs bg-surface-700 px-1.5 py-0.5 rounded">
+								{commentStats.total_comments}
+							</span>
+							{#if commentStats.average_rating && commentStats.average_rating > 0}
+								<span class="text-xs flex items-center gap-1 text-yellow-400">
+									<Star class="w-3 h-3 fill-current" />
+									{commentStats.average_rating.toFixed(1)}
+								</span>
+							{/if}
+						{/if}
+					</h3>
+					{#if showComments}
+						<ChevronUp class="w-4 h-4 text-surface-500" />
+					{:else}
+						<ChevronDown class="w-4 h-4 text-surface-500" />
+					{/if}
+				</button>
+
+				{#if showComments}
+					<div class="mt-3">
+						<!-- Comment input -->
+						<div class="bg-surface-800 rounded-lg p-3 mb-3">
+							<div class="flex items-center gap-2 mb-2">
+								<span class="text-xs text-surface-400">Rating:</span>
+								{#each [1, 2, 3, 4, 5] as star}
+									<button
+										class="p-0.5"
+										onclick={() => newCommentRating = newCommentRating === star ? 0 : star}
+									>
+										<Star class="w-4 h-4 {newCommentRating >= star ? 'text-yellow-400 fill-current' : 'text-surface-600'}" />
+									</button>
+								{/each}
+							</div>
+							<div class="flex gap-2">
+								<input
+									type="text"
+									bind:value={newCommentContent}
+									placeholder="Add a comment..."
+									class="input flex-1 text-sm py-1.5"
+									onkeydown={(e) => e.key === 'Enter' && submitComment()}
+								/>
+								<button
+									class="btn-primary py-1.5 px-3"
+									onclick={submitComment}
+									disabled={!newCommentContent.trim()}
+								>
+									<Send class="w-4 h-4" />
+								</button>
+							</div>
+						</div>
+
+						<!-- Comments list -->
+						{#if loadingComments}
+							<div class="text-center py-4">
+								<div class="animate-spin w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full mx-auto"></div>
+							</div>
+						{:else if comments.length > 0}
+							<div class="space-y-2 max-h-60 overflow-y-auto">
+								{#each comments as comment}
+									<div class="p-3 bg-surface-800 rounded-lg">
+										<div class="flex items-start justify-between mb-1">
+											<div class="flex items-center gap-2">
+												<code class="text-xs text-surface-400 font-mono">
+													{comment.author_pubkey.slice(0, 8)}...
+												</code>
+												{#if comment.rating && comment.rating > 0}
+													<div class="flex items-center gap-0.5">
+														{#each Array(comment.rating) as _}
+															<Star class="w-3 h-3 text-yellow-400 fill-current" />
+														{/each}
+													</div>
+												{/if}
+											</div>
+											<span class="text-xs text-surface-500">
+												{formatCommentDate(comment.created_at)}
+											</span>
+										</div>
+										<p class="text-sm text-surface-300">{comment.content}</p>
+									</div>
+								{/each}
+							</div>
+						{:else}
+							<p class="text-sm text-surface-500 text-center py-4">
+								No comments yet. Be the first to comment!
+							</p>
+						{/if}
+					</div>
+				{/if}
+			</div>
+
+			<!-- Report Section -->
+			<div class="mt-4 pt-4 border-t border-surface-800">
+				<button
+					class="flex items-center gap-2 text-sm text-red-400 hover:text-red-300"
+					onclick={() => showReportForm = !showReportForm}
+				>
+					<Flag class="w-4 h-4" />
+					Report this torrent
+				</button>
+
+				{#if showReportForm}
+					<div class="mt-3 p-4 bg-surface-800 rounded-lg">
+						<div class="space-y-3">
+							<div>
+								<label class="label" for="report-category">Category</label>
+								<select
+									id="report-category"
+									bind:value={reportCategory}
+									class="input"
+								>
+									{#each reportCategories as cat}
+										<option value={cat.value}>{cat.label}</option>
+									{/each}
+								</select>
+							</div>
+							<div>
+								<label class="label" for="report-evidence">Evidence / Details (optional)</label>
+								<textarea
+									id="report-evidence"
+									bind:value={reportEvidence}
+									placeholder="Provide any additional details or evidence..."
+									class="input resize-none"
+									rows="3"
+								></textarea>
+							</div>
+							<div class="flex justify-end gap-2">
+								<button
+									class="btn-secondary text-sm"
+									onclick={() => showReportForm = false}
+								>
+									Cancel
+								</button>
+								<button
+									class="btn-primary text-sm bg-red-600 hover:bg-red-500"
+									onclick={submitReport}
+									disabled={submittingReport}
+								>
+									{submittingReport ? 'Submitting...' : 'Submit Report'}
+								</button>
+							</div>
+						</div>
+					</div>
+				{/if}
+			</div>
 		</div>
 
 		<div class="modal-footer">

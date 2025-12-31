@@ -19,7 +19,12 @@
 		ExternalLink,
 		FileText,
 		ChevronDown,
-		ChevronUp
+		ChevronUp,
+		FileCheck,
+		Crown,
+		Flag,
+		CheckCircle,
+		XCircle
 	} from 'lucide-svelte';
 	import { api } from '$lib/api/client';
 	import {
@@ -31,7 +36,7 @@
 		getCategoryColor,
 		addToast
 	} from '$lib/stores/app';
-	import type { TorrentSummary, TorrentDetail } from '$lib/api/client';
+	import type { TorrentSummary, TorrentDetail, DecisionStats, CuratorsResponse, ReportsResponse } from '$lib/api/client';
 
 	interface TorrentFile {
 		name: string;
@@ -42,6 +47,11 @@
 	let refreshInterval: ReturnType<typeof setInterval>;
 	let selectedTorrent: TorrentDetail | null = null;
 	let showAllFiles = false;
+
+	// Curation stats
+	let decisionStats: DecisionStats | null = null;
+	let curatorCount = 0;
+	let pendingReports = 0;
 
 	const categoryIcons: Record<number, typeof Film> = {
 		2000: Film,
@@ -63,9 +73,17 @@
 
 	async function loadData() {
 		try {
-			const statsData = await api.getStats();
+			const [statsData, decisions, curators, reports] = await Promise.all([
+				api.getStats(),
+				api.getDecisionStats().catch(() => null),
+				api.getCurators().catch(() => ({ curators: [], total: 0 })),
+				api.getPendingReports().catch(() => ({ reports: [], total: 0 }))
+			]);
 			stats.set(statsData);
 			recentTorrents = statsData.recent_torrents || [];
+			decisionStats = decisions;
+			curatorCount = curators.total || curators.curators?.length || 0;
+			pendingReports = reports.total || reports.reports?.length || 0;
 		} catch (error) {
 			console.error('Failed to load dashboard data:', error);
 		}
@@ -202,6 +220,59 @@
 		</div>
 	</div>
 
+	<!-- Curation Stats -->
+	{#if decisionStats || curatorCount > 0 || pendingReports > 0}
+		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+			<div class="stat-card">
+				<div class="flex items-center gap-3">
+					<div class="p-2 bg-blue-900/50 rounded-lg">
+						<FileCheck class="w-5 h-5 text-blue-400" />
+					</div>
+					<div>
+						<p class="stat-value">{formatNumber(decisionStats?.total_decisions ?? 0)}</p>
+						<p class="stat-label">Curation Decisions</p>
+					</div>
+				</div>
+			</div>
+
+			<div class="stat-card">
+				<div class="flex items-center gap-3">
+					<div class="p-2 bg-green-900/50 rounded-lg">
+						<CheckCircle class="w-5 h-5 text-green-400" />
+					</div>
+					<div>
+						<p class="stat-value">{formatNumber(decisionStats?.accept_count ?? 0)}</p>
+						<p class="stat-label">Accepted</p>
+					</div>
+				</div>
+			</div>
+
+			<div class="stat-card">
+				<div class="flex items-center gap-3">
+					<div class="p-2 bg-purple-900/50 rounded-lg">
+						<Crown class="w-5 h-5 text-purple-400" />
+					</div>
+					<div>
+						<p class="stat-value">{formatNumber(curatorCount)}</p>
+						<p class="stat-label">Trusted Curators</p>
+					</div>
+				</div>
+			</div>
+
+			<a href="/reports" class="stat-card hover:border-yellow-500/50 transition-colors">
+				<div class="flex items-center gap-3">
+					<div class="p-2 bg-yellow-900/50 rounded-lg">
+						<Flag class="w-5 h-5 text-yellow-400" />
+					</div>
+					<div>
+						<p class="stat-value">{formatNumber(pendingReports)}</p>
+						<p class="stat-label">Pending Reports</p>
+					</div>
+				</div>
+			</a>
+		</div>
+	{/if}
+
 	<!-- Categories breakdown -->
 	{#if getCategoryStats().length > 0}
 		<div class="card mb-8">
@@ -320,7 +391,7 @@
 
 <!-- Torrent detail modal -->
 {#if selectedTorrent}
-	<div class="modal-backdrop" onclick={closeTorrent}></div>
+	<div class="modal-backdrop" onclick={closeTorrent} onkeydown={(e) => e.key === 'Escape' && closeTorrent()} role="button" tabindex="-1"></div>
 	<div class="modal max-w-2xl">
 		<div class="modal-header">
 			<h2 class="text-lg font-semibold text-white">

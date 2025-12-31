@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/lighthouse-client/lighthouse/internal/config"
-	"github.com/lighthouse-client/lighthouse/internal/torznab"
+	"github.com/gmonarque/lighthouse/internal/config"
+	"github.com/gmonarque/lighthouse/internal/torznab"
 )
 
 // Torznab handles all Torznab API requests

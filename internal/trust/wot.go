@@ -1,8 +1,8 @@
 package trust
 
 import (
-	"github.com/lighthouse-client/lighthouse/internal/config"
-	"github.com/lighthouse-client/lighthouse/internal/database"
+	"github.com/gmonarque/lighthouse/internal/config"
+	"github.com/gmonarque/lighthouse/internal/database"
 )
 
 // WebOfTrust manages the trust graph

@@ -16,7 +16,11 @@
 		Film,
 		Filter,
 		Plus,
-		X
+		X,
+		Radio,
+		Globe,
+		Users,
+		Shield
 	} from 'lucide-svelte';
 	import { api } from '$lib/api/client';
 	import type { AppSettings, IndexerStatus } from '$lib/api/client';
@@ -35,6 +39,15 @@
 	let tagFilterEnabled = false;
 	let tagFilter: string[] = [];
 	let newTag = '';
+
+	// Relay server state
+	let relayEnabled = false;
+	let relayListen = '0.0.0.0:9998';
+	let relayMode: 'public' | 'community' = 'community';
+	let relayRequireCuration = true;
+	let relaySyncWith: string[] = [];
+	let relayEnableDiscovery = false;
+	let newSyncRelay = '';
 
 	// Common tags from NIP-35
 	const suggestedTags = ['movie', 'tv', 'music', 'games', 'software', 'books', 'xxx', '4k', 'hd', 'uhd'];
@@ -72,6 +85,14 @@
 			// Load tag filter settings
 			tagFilterEnabled = settingsData.indexer?.tag_filter_enabled ?? false;
 			tagFilter = settingsData.indexer?.tag_filter ?? [];
+
+			// Load relay server settings
+			relayEnabled = settingsData.relay?.enabled ?? false;
+			relayListen = settingsData.relay?.listen ?? '0.0.0.0:9998';
+			relayMode = settingsData.relay?.mode ?? 'community';
+			relayRequireCuration = settingsData.relay?.require_curation ?? true;
+			relaySyncWith = settingsData.relay?.sync_with ?? [];
+			relayEnableDiscovery = settingsData.relay?.enable_discovery ?? false;
 		} catch (error) {
 			console.error('Failed to load settings:', error);
 			addToast('error', 'Failed to load settings');
@@ -158,6 +179,18 @@
 		}
 	}
 
+	let resyncDays = 30;
+
+	async function resyncIndexer() {
+		try {
+			await api.resyncIndexer(resyncDays);
+			const timeMsg = resyncDays === 0 ? 'all time' : `last ${resyncDays} days`;
+			addToast('success', `Fetching historical torrents (${timeMsg})... Only trusted uploaders will be indexed.`);
+		} catch (error) {
+			addToast('error', 'Failed to start resync');
+		}
+	}
+
 	async function exportConfig() {
 		try {
 			const config = await api.exportConfig();
@@ -204,6 +237,41 @@
 			addTag(newTag);
 		}
 	}
+
+	async function updateRelaySettings() {
+		try {
+			await api.updateSettings({
+				'relay.enabled': relayEnabled,
+				'relay.listen': relayListen,
+				'relay.mode': relayMode,
+				'relay.require_curation': relayRequireCuration,
+				'relay.sync_with': relaySyncWith,
+				'relay.enable_discovery': relayEnableDiscovery
+			});
+			addToast('success', 'Relay server settings saved. Restart required for changes to take effect.');
+		} catch (error) {
+			addToast('error', 'Failed to save relay server settings');
+		}
+	}
+
+	function addSyncRelay(url: string) {
+		const normalizedUrl = url.trim();
+		if (normalizedUrl && !relaySyncWith.includes(normalizedUrl)) {
+			relaySyncWith = [...relaySyncWith, normalizedUrl];
+		}
+		newSyncRelay = '';
+	}
+
+	function removeSyncRelay(url: string) {
+		relaySyncWith = relaySyncWith.filter((r) => r !== url);
+	}
+
+	function handleSyncRelayKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			addSyncRelay(newSyncRelay);
+		}
+	}
 </script>
 
 <div class="page-header">
@@ -221,9 +289,10 @@
 
 		<div class="space-y-4">
 			<div>
-				<label class="label">Public Key (npub)</label>
+				<label class="label" for="settings-npub">Public Key (npub)</label>
 				<div class="flex gap-2">
 					<input
+						id="settings-npub"
 						type="text"
 						value={settings?.nostr.identity.npub || 'Not configured'}
 						readonly
@@ -239,9 +308,10 @@
 			</div>
 
 			<div>
-				<label class="label">Private Key (nsec)</label>
+				<label class="label" for="settings-nsec">Private Key (nsec)</label>
 				<div class="flex gap-2">
 					<input
+						id="settings-nsec"
 						type={showNsec ? 'text' : 'password'}
 						value={settings?.nostr.identity.nsec || 'Not configured'}
 						readonly
@@ -274,9 +344,10 @@
 
 			{#if showImportForm}
 				<div class="p-4 bg-surface-800 rounded-lg">
-					<label class="label">Import nsec</label>
+					<label class="label" for="import-nsec">Import nsec</label>
 					<div class="flex gap-2">
 						<input
+							id="import-nsec"
 							type="password"
 							bind:value={importNsec}
 							placeholder="nsec1..."
@@ -300,9 +371,10 @@
 
 		<div class="space-y-4">
 			<div>
-				<label class="label">API Key</label>
+				<label class="label" for="settings-api-key">API Key</label>
 				<div class="flex gap-2">
 					<input
+						id="settings-api-key"
 						type="text"
 						value={settings?.server.api_key || 'Not set'}
 						readonly
@@ -315,9 +387,10 @@
 			</div>
 
 			<div>
-				<label class="label">Torznab URL (for Prowlarr/Sonarr/Radarr)</label>
+				<label class="label" for="settings-torznab-url">Torznab URL (for Prowlarr/Sonarr/Radarr)</label>
 				<div class="flex gap-2">
 					<input
+						id="settings-torznab-url"
 						type="text"
 						value="{window.location.origin}/api/torznab"
 						readonly
@@ -349,9 +422,10 @@
 			</div>
 
 			<div>
-				<label class="label">TMDB API Key</label>
+				<label class="label" for="settings-tmdb-key">TMDB API Key</label>
 				<div class="flex gap-2">
 					<input
+						id="settings-tmdb-key"
 						type="password"
 						bind:value={tmdbApiKey}
 						placeholder={settings?.enrichment.tmdb_api_key ? '••• Configured' : 'Enter API key'}
@@ -364,9 +438,10 @@
 			</div>
 
 			<div>
-				<label class="label">OMDB API Key</label>
+				<label class="label" for="settings-omdb-key">OMDB API Key</label>
 				<div class="flex gap-2">
 					<input
+						id="settings-omdb-key"
 						type="password"
 						bind:value={omdbApiKey}
 						placeholder={settings?.enrichment.omdb_api_key ? '••• Configured' : 'Enter API key'}
@@ -412,6 +487,21 @@
 						<Square class="w-4 h-4" />
 						Stop Indexer
 					</button>
+					<div class="flex items-center gap-2">
+						<select bind:value={resyncDays} class="input w-28 text-sm">
+							<option value={7}>7 days</option>
+							<option value={14}>14 days</option>
+							<option value={30}>30 days</option>
+							<option value={90}>90 days</option>
+							<option value={180}>180 days</option>
+							<option value={365}>1 year</option>
+							<option value={0}>No limit</option>
+						</select>
+						<button class="btn-secondary" onclick={resyncIndexer}>
+							<RefreshCw class="w-4 h-4" />
+							Resync
+						</button>
+					</div>
 				{:else}
 					<button class="btn-primary" onclick={startIndexer}>
 						<Play class="w-4 h-4" />
@@ -449,7 +539,7 @@
 				<div class="space-y-3">
 					<!-- Current tags -->
 					<div>
-						<label class="label">Active Tags</label>
+						<span class="label">Active Tags</span>
 						<div class="flex flex-wrap gap-2 min-h-[2.5rem] p-2 bg-surface-800 rounded-lg">
 							{#if tagFilter.length === 0}
 								<span class="text-surface-500 text-sm">No tags configured - all torrents will be indexed</span>
@@ -472,9 +562,10 @@
 
 					<!-- Add new tag -->
 					<div>
-						<label class="label">Add Tag</label>
+						<label class="label" for="settings-add-tag">Add Tag</label>
 						<div class="flex gap-2">
 							<input
+								id="settings-add-tag"
 								type="text"
 								bind:value={newTag}
 								onkeydown={handleTagKeydown}
@@ -494,7 +585,7 @@
 
 					<!-- Suggested tags -->
 					<div>
-						<label class="label">Suggested Tags</label>
+						<span class="label">Suggested Tags</span>
 						<div class="flex flex-wrap gap-2">
 							{#each suggestedTags.filter((t) => !tagFilter.includes(t)) as tag}
 								<button
@@ -511,6 +602,156 @@
 
 			<button class="btn-primary" onclick={updateTagFilter}>
 				Save Tag Filter Settings
+			</button>
+		</div>
+	</div>
+
+	<!-- Relay Server -->
+	<div class="card">
+		<div class="flex items-center gap-3 mb-4">
+			<Radio class="w-5 h-5 text-primary-400" />
+			<h2 class="text-lg font-semibold text-white">Nostr Relay Server</h2>
+		</div>
+
+		<div class="space-y-4">
+			<p class="text-sm text-surface-400">
+				Run your own Nostr relay server to share torrent metadata with others. This allows your instance to act as a relay for NIP-35 torrent events.
+			</p>
+
+			<div class="flex items-center gap-3">
+				<label class="flex items-center gap-2 cursor-pointer">
+					<input
+						type="checkbox"
+						bind:checked={relayEnabled}
+						class="w-4 h-4 rounded border-surface-600 bg-surface-700 text-primary-500 focus:ring-primary-500"
+					/>
+					<span class="text-white">Enable Relay Server</span>
+				</label>
+			</div>
+
+			{#if relayEnabled}
+				<div class="space-y-4 p-4 bg-surface-800 rounded-lg">
+					<!-- Listen Address -->
+					<div>
+						<label class="label" for="relay-listen">Listen Address</label>
+						<input
+							id="relay-listen"
+							type="text"
+							bind:value={relayListen}
+							placeholder="0.0.0.0:9998"
+							class="input font-mono"
+						/>
+						<p class="text-xs text-surface-500 mt-1">WebSocket server address (host:port)</p>
+					</div>
+
+					<!-- Mode -->
+					<div>
+						<span class="label">Relay Mode</span>
+						<div class="flex gap-4 mt-2">
+							<label class="flex items-center gap-2 cursor-pointer">
+								<input
+									type="radio"
+									bind:group={relayMode}
+									value="community"
+									class="w-4 h-4 border-surface-600 bg-surface-700 text-primary-500 focus:ring-primary-500"
+								/>
+								<span class="flex items-center gap-1 text-white">
+									<Users class="w-4 h-4 text-surface-400" />
+									Community
+								</span>
+							</label>
+							<label class="flex items-center gap-2 cursor-pointer">
+								<input
+									type="radio"
+									bind:group={relayMode}
+									value="public"
+									class="w-4 h-4 border-surface-600 bg-surface-700 text-primary-500 focus:ring-primary-500"
+								/>
+								<span class="flex items-center gap-1 text-white">
+									<Globe class="w-4 h-4 text-surface-400" />
+									Public
+								</span>
+							</label>
+						</div>
+						<p class="text-xs text-surface-500 mt-1">
+							{relayMode === 'community' ? 'Only accept events from trusted users' : 'Accept events from anyone'}
+						</p>
+					</div>
+
+					<!-- Require Curation -->
+					<div class="flex items-center gap-3">
+						<label class="flex items-center gap-2 cursor-pointer">
+							<input
+								type="checkbox"
+								bind:checked={relayRequireCuration}
+								class="w-4 h-4 rounded border-surface-600 bg-surface-700 text-primary-500 focus:ring-primary-500"
+							/>
+							<span class="flex items-center gap-1 text-white">
+								<Shield class="w-4 h-4 text-surface-400" />
+								Require Curation
+							</span>
+						</label>
+					</div>
+					<p class="text-xs text-surface-500 -mt-2">Only accept curated/verified content</p>
+
+					<!-- Enable Discovery -->
+					<div class="flex items-center gap-3">
+						<label class="flex items-center gap-2 cursor-pointer">
+							<input
+								type="checkbox"
+								bind:checked={relayEnableDiscovery}
+								class="w-4 h-4 rounded border-surface-600 bg-surface-700 text-primary-500 focus:ring-primary-500"
+							/>
+							<span class="text-white">Enable Relay Discovery</span>
+						</label>
+					</div>
+					<p class="text-xs text-surface-500 -mt-2">Announce this relay on Nostr for discovery</p>
+
+					<!-- Sync With Relays -->
+					<div>
+						<span class="label">Sync With Relays</span>
+						<div class="flex flex-wrap gap-2 min-h-[2.5rem] p-2 bg-surface-700 rounded-lg mb-2">
+							{#if relaySyncWith.length === 0}
+								<span class="text-surface-500 text-sm">No sync relays configured</span>
+							{:else}
+								{#each relaySyncWith as url}
+									<span class="inline-flex items-center gap-1 px-2 py-1 bg-primary-500/20 text-primary-400 rounded-md text-sm font-mono">
+										{url}
+										<button
+											onclick={() => removeSyncRelay(url)}
+											class="hover:text-red-400 transition-colors"
+											aria-label="Remove relay"
+										>
+											<X class="w-3 h-3" />
+										</button>
+									</span>
+								{/each}
+							{/if}
+						</div>
+						<div class="flex gap-2">
+							<input
+								type="text"
+								bind:value={newSyncRelay}
+								onkeydown={handleSyncRelayKeydown}
+								placeholder="wss://relay.example.com"
+								class="input font-mono flex-1"
+							/>
+							<button
+								class="btn-secondary"
+								onclick={() => addSyncRelay(newSyncRelay)}
+								disabled={!newSyncRelay.trim()}
+							>
+								<Plus class="w-4 h-4" />
+								Add
+							</button>
+						</div>
+						<p class="text-xs text-surface-500 mt-1">Relay URLs to sync events with</p>
+					</div>
+				</div>
+			{/if}
+
+			<button class="btn-primary" onclick={updateRelaySettings}>
+				Save Relay Settings
 			</button>
 		</div>
 	</div>

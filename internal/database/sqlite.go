@@ -2,24 +2,22 @@ package database
 
 import (
 	"database/sql"
-	"embed"
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 
-	"github.com/lighthouse-client/lighthouse/internal/config"
+	"github.com/gmonarque/lighthouse/internal/config"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rs/zerolog/log"
 )
 
-//go:embed migrations/*.sql
-var migrationsFS embed.FS
+//go:embed schema.sql
+var schemaSQL string
 
 var db *sql.DB
 
-// Init initializes the SQLite database connection and runs migrations
+// Init initializes the SQLite database connection and runs schema
 func Init(dbPath string) error {
 	// Ensure directory exists
 	dir := filepath.Dir(dbPath)
@@ -45,15 +43,43 @@ func Init(dbPath string) error {
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	// Run migrations
-	if err := runMigrations(); err != nil {
-		return fmt.Errorf("failed to run migrations: %w", err)
+	// Run schema
+	if err := runSchema(); err != nil {
+		return fmt.Errorf("failed to run schema: %w", err)
 	}
 
 	// Register setup checker with config package
 	config.SetupCompletedChecker = IsSetupCompleted
 
+	// Auto-detect setup completion from config.yaml identity
+	if err := autoDetectSetupCompletion(); err != nil {
+		log.Warn().Err(err).Msg("Failed to auto-detect setup completion")
+	}
+
 	log.Info().Str("path", dbPath).Msg("Database initialized")
+	return nil
+}
+
+// autoDetectSetupCompletion checks if config.yaml has identity configured
+// and marks setup as complete if so (for users with existing configs)
+func autoDetectSetupCompletion() error {
+	// Check if setup is already marked complete
+	value, err := GetSetting("setup_completed")
+	if err != nil {
+		return err
+	}
+	if value == "true" {
+		return nil // Already complete
+	}
+
+	// Check if config has identity configured
+	cfg := config.Get()
+	if cfg.Nostr.Identity.Npub != "" && cfg.Nostr.Identity.Nsec != "" {
+		// Config has identity, mark setup as complete
+		log.Info().Msg("Detected existing identity in config.yaml, marking setup as complete")
+		return SetSetting("setup_completed", "true")
+	}
+
 	return nil
 }
 
@@ -62,11 +88,20 @@ func IsSetupCompleted() bool {
 	if db == nil {
 		return false
 	}
+
+	// First check database flag
 	value, err := GetSetting("setup_completed")
-	if err != nil {
-		return false
+	if err == nil && value == "true" {
+		return true
 	}
-	return value == "true"
+
+	// Also check if config has identity (for existing users)
+	cfg := config.Get()
+	if cfg.Nostr.Identity.Npub != "" && cfg.Nostr.Identity.Nsec != "" {
+		return true
+	}
+
+	return false
 }
 
 // Get returns the database connection
@@ -85,37 +120,13 @@ func Close() error {
 	return nil
 }
 
-// runMigrations executes all SQL migration files in order
-func runMigrations() error {
-	entries, err := migrationsFS.ReadDir("migrations")
+// runSchema executes the database schema
+func runSchema() error {
+	log.Debug().Msg("Running database schema")
+	_, err := db.Exec(schemaSQL)
 	if err != nil {
-		return fmt.Errorf("failed to read migrations directory: %w", err)
+		return fmt.Errorf("failed to execute schema: %w", err)
 	}
-
-	// Sort migrations by filename
-	var migrationFiles []string
-	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), ".sql") {
-			migrationFiles = append(migrationFiles, entry.Name())
-		}
-	}
-	sort.Strings(migrationFiles)
-
-	// Execute each migration
-	for _, filename := range migrationFiles {
-		content, err := migrationsFS.ReadFile("migrations/" + filename)
-		if err != nil {
-			return fmt.Errorf("failed to read migration %s: %w", filename, err)
-		}
-
-		log.Debug().Str("file", filename).Msg("Running migration")
-
-		_, err = db.Exec(string(content))
-		if err != nil {
-			return fmt.Errorf("failed to execute migration %s: %w", filename, err)
-		}
-	}
-
 	return nil
 }
 

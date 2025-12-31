@@ -3,8 +3,9 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"strconv"
 
-	"github.com/lighthouse-client/lighthouse/internal/database"
+	"github.com/gmonarque/lighthouse/internal/database"
 )
 
 // IndexerController interface for controlling the indexer
@@ -12,6 +13,7 @@ type IndexerController interface {
 	Start(ctx context.Context) error
 	Stop()
 	IsRunning() bool
+	FetchHistorical(days int) error
 }
 
 // RelayLoader interface for loading relays from database
@@ -113,5 +115,42 @@ func GetIndexerStatus(w http.ResponseWriter, r *http.Request) {
 		"enabled":          enabled == "true",
 		"total_torrents":   stats["total_torrents"],
 		"connected_relays": stats["connected_relays"],
+	})
+}
+
+// ResyncIndexer fetches historical torrents from relays
+func ResyncIndexer(w http.ResponseWriter, r *http.Request) {
+	if indexerController == nil {
+		respondError(w, http.StatusInternalServerError, "Indexer not initialized")
+		return
+	}
+
+	if !indexerController.IsRunning() {
+		respondError(w, http.StatusBadRequest, "Indexer must be running to resync")
+		return
+	}
+
+	// Get days parameter (default 0 = no limit, fetch all historical events)
+	daysParam := r.URL.Query().Get("days")
+	days := 0
+	if daysParam != "" {
+		if d, err := strconv.Atoi(daysParam); err == nil && d >= 0 {
+			days = d
+		}
+	}
+
+	// Fetch historical data in background
+	go func() {
+		if err := indexerController.FetchHistorical(days); err != nil {
+			database.LogActivity("resync_failed", err.Error())
+		} else {
+			database.LogActivity("resync_completed", strconv.Itoa(days)+" days")
+		}
+	}()
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "syncing",
+		"message": "Fetching historical torrents",
+		"days":    days,
 	})
 }

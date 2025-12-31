@@ -1,6 +1,8 @@
 # Lighthouse
 
-Self-hosted Nostr indexer for NIP-35 torrent events. Comes with a Torznab API so it works with Prowlarr, Sonarr, Radarr, and other *arr apps.
+Self-hosted Nostr indexer for NIP-35 torrent events with federated curation. Comes with a Torznab API so it works with Prowlarr, Sonarr, Radarr, and other *arr apps.
+
+**[Full Documentation](https://gmonarque.github.io/lighthouse/)** | [Quick Start](#quick-start) | [API Reference](docs/api-reference.md)
 
 ## Disclaimer
 
@@ -14,6 +16,10 @@ This software is a Nostr protocol indexer that reads publicly available NIP-35 e
 - Publish metadata events to Nostr relays (parses .torrent file headers only)
 - Filter what is indexed based on tags
 - Web of Trust filtering - only see content from people you trust
+- Federated curation- trust curators who apply moderation rulesets
+- Verification decisions - cryptographically signed accept/reject decisions
+- Report/appeal system - formal channels for content moderation
+- Comments - NIP-35 compatible comment system (Kind 2004)
 - Torznab API for seamless *arr apps integration
 - Auto-fetches metadata from TMDB/OMDB
 - Single Go binary + SQLite, runs anywhere
@@ -108,15 +114,7 @@ From the Trust page you can:
 
 ## Categories
 
-Full Torznab category support with subcategories:
-
-- **Movies**: Foreign, SD, HD, UHD/4K, 3D, BluRay, DVD, WEB-DL
-- **TV**: SD, HD, UHD, WEB-DL, Anime, Documentary, Sport
-- **Audio**: MP3, Lossless, Audiobook
-- **PC**: Games, Software, Mac, iOS, Android
-- **Books**: EBook, Comics, Magazines, Technical
-- **Console**: Various platforms
-- **XXX**: Adult content (filterable)
+Full Torznab category support with subcategories.
 
 ## API Reference
 
@@ -131,11 +129,13 @@ Full Torznab category support with subcategories:
 | `/api/publish/parse-torrent` | POST | Parse .torrent file |
 | `/api/publish` | POST | Publish torrent to relays |
 | `/api/trust/whitelist` | GET/POST/DELETE | Manage whitelist |
+| `/api/trust/whitelist/{npub}/discover-relays` | POST | Discover user's relays (NIP-65) |
 | `/api/trust/blacklist` | GET/POST/DELETE | Manage blacklist |
 | `/api/relays` | GET/POST/PUT/DELETE | Manage relays |
 | `/api/settings` | GET/PUT | App settings |
 | `/api/indexer/start` | POST | Start indexer |
 | `/api/indexer/stop` | POST | Stop indexer |
+| `/api/indexer/resync` | POST | Resync historical events |
 
 ### Torznab API
 
@@ -146,6 +146,19 @@ Full Torznab category support with subcategories:
 | `/api/torznab?t=tvsearch` | q, season, ep | TV search |
 | `/api/torznab?t=movie` | q, imdbid, tmdbid | Movie search |
 
+## Federated Curation
+
+Lighthouse supports federated content curation through trusted curators:
+
+| Component | Description |
+|-----------|-------------|
+| **Curators** | Trusted entities that review and validate content |
+| **Rulesets** | Versioned moderation policies (censoring + semantic) |
+| **Decisions** | Cryptographically signed accept/reject decisions |
+| **Aggregation** | Combine decisions from multiple curators (quorum, weighted, etc.) |
+
+See [Curation Documentation](docs/curation.md) for setup instructions.
+
 ## Project structure
 
 ```
@@ -153,13 +166,22 @@ lighthouse/
 ├── cmd/lighthouse/        # entry point
 ├── internal/
 │   ├── api/              # HTTP handlers & router
+│   ├── comments/         # torrent comments
 │   ├── config/           # configuration
+│   ├── curator/          # curation engine
 │   ├── database/         # SQLite & migrations
+│   ├── decision/         # verification decisions
+│   ├── explorer/         # relay event discovery
 │   ├── indexer/          # torrent indexing
+│   ├── models/           # shared data models
+│   ├── moderation/       # reports & appeals
 │   ├── nostr/            # Nostr client & events
+│   ├── relay/            # Nostr relay server
+│   ├── ruleset/          # rule engine
 │   ├── torznab/          # Torznab protocol
 │   └── trust/            # Web of Trust
 ├── web/                  # Svelte frontend
+├── docs/                 # documentation
 └── docker/               # Docker stuff
 ```
 
@@ -174,10 +196,24 @@ make build         # production build
 make docker        # build docker image
 ```
 
-## 🔗 Links
+## Documentation
+
+- [Full Documentation](https://gmonarque.github.io/lighthouse/) - Complete user and developer guide
+- [Getting Started](docs/getting-started.md) - Quick start guide
+- [Installation](docs/installation.md) - Detailed installation
+- [Configuration](docs/configuration.md) - Configuration reference
+- [API Reference](docs/api-reference.md) - REST and Torznab API
+- [Architecture](docs/architecture.md) - System design
+- [Web of Trust](docs/web-of-trust.md) - Trust system guide
+- [Curation](docs/curation.md) - Curator setup
+- [Federation](docs/federation.md) - Multi-node deployment
+- [Development](docs/development.md) - Contributing guide
+
+## Links
 
 - [NIP-35 spec](https://github.com/nostr-protocol/nips/blob/master/35.md) - Nostr torrent protocol
 - [go-nostr](https://github.com/nbd-wtf/go-nostr) - Nostr library used
+- [Whitepaper](whitepaper.pdf) - Project whitepaper
 
 ## License
 

@@ -13,7 +13,12 @@
 		Activity,
 		Compass,
 		Menu,
-		X
+		X,
+		FileCheck,
+		Flag,
+		Key,
+		Clock,
+		BarChart3
 	} from 'lucide-svelte';
 	import { api } from '$lib/api/client';
 	import { setupStatus, stats, indexerStatus, toasts, removeToast, addToast } from '$lib/stores/app';
@@ -25,8 +30,17 @@
 		{ href: '/search', label: 'Search', icon: Search },
 		{ href: '/publish', label: 'Publish', icon: Upload },
 		{ href: '/trust', label: 'Trust', icon: Shield },
+		{ href: '/curation', label: 'Curation', icon: FileCheck },
+		{ href: '/reports', label: 'Reports', icon: Flag },
 		{ href: '/relays', label: 'Relays', icon: Radio },
 		{ href: '/settings', label: 'Settings', icon: Settings }
+	];
+
+	const adminItems = [
+		{ href: '/admin/apikeys', label: 'API Keys', icon: Key },
+		{ href: '/admin/activity', label: 'Activity', icon: Activity },
+		{ href: '/admin/explorer', label: 'Explorer', icon: BarChart3 },
+		{ href: '/admin/sla', label: 'SLA', icon: Clock }
 	];
 
 	onMount(async () => {
@@ -86,7 +100,7 @@
 			</div>
 
 			<!-- Navigation -->
-			<nav class="flex-1 px-3 py-4 space-y-1">
+			<nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
 				{#each navItems as item}
 					<a
 						href={item.href}
@@ -96,6 +110,22 @@
 						{item.label}
 					</a>
 				{/each}
+
+				<!-- Admin Section -->
+				<div class="pt-4 mt-4 border-t border-surface-800">
+					<span class="px-3 text-xs font-medium text-surface-500 uppercase tracking-wider">Admin</span>
+					<div class="mt-2 space-y-1">
+						{#each adminItems as item}
+							<a
+								href={item.href}
+								class={isActive(item.href) ? 'nav-link-active' : 'nav-link'}
+							>
+								<svelte:component this={item.icon} class="w-5 h-5" />
+								{item.label}
+							</a>
+						{/each}
+					</div>
+				</div>
 			</nav>
 
 			<!-- Status footer -->

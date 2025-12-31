@@ -1,14 +1,15 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
 
+	"github.com/gmonarque/lighthouse/internal/config"
+	"github.com/gmonarque/lighthouse/internal/database"
+	"github.com/gmonarque/lighthouse/internal/nostr"
 	"github.com/go-chi/chi/v5"
-	"github.com/lighthouse-client/lighthouse/internal/config"
-	"github.com/lighthouse-client/lighthouse/internal/database"
-	"github.com/lighthouse-client/lighthouse/internal/nostr"
 )
 
 // GetWhitelist returns all whitelisted npubs
@@ -344,5 +345,93 @@ func UpdateTrustSettings(w http.ResponseWriter, r *http.Request) {
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"depth": req.Depth,
+	})
+}
+
+// RelayDiscoverer interface for discovering user relays
+type RelayDiscoverer interface {
+	DiscoverAndAddUserRelays(ctx context.Context, npub string) (int, error)
+}
+
+var relayDiscoverer RelayDiscoverer
+
+// SetRelayDiscoverer sets the relay discoverer reference
+func SetRelayDiscoverer(rd RelayDiscoverer) {
+	relayDiscoverer = rd
+}
+
+// DiscoverUserRelays discovers and adds relays for a whitelisted user
+func DiscoverUserRelays(w http.ResponseWriter, r *http.Request) {
+	npub := chi.URLParam(r, "npub")
+
+	if relayDiscoverer == nil {
+		respondError(w, http.StatusInternalServerError, "Relay discoverer not initialized")
+		return
+	}
+
+	// Verify user is in whitelist
+	db := database.Get()
+	var exists int
+	err := db.QueryRow("SELECT COUNT(*) FROM trust_whitelist WHERE npub = ?", npub).Scan(&exists)
+	if err != nil || exists == 0 {
+		respondError(w, http.StatusNotFound, "User not in whitelist")
+		return
+	}
+
+	// Discover relays
+	added, err := relayDiscoverer.DiscoverAndAddUserRelays(r.Context(), npub)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to discover relays: "+err.Error())
+		return
+	}
+
+	database.LogActivity("relays_discovered", npub)
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"npub":          npub,
+		"relays_added":  added,
+		"status":        "discovered",
+	})
+}
+
+// DiscoverAllTrustedRelays discovers relays for all whitelisted users
+func DiscoverAllTrustedRelays(w http.ResponseWriter, r *http.Request) {
+	if relayDiscoverer == nil {
+		respondError(w, http.StatusInternalServerError, "Relay discoverer not initialized")
+		return
+	}
+
+	db := database.Get()
+	rows, err := db.Query("SELECT npub FROM trust_whitelist")
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to get whitelist")
+		return
+	}
+	defer rows.Close()
+
+	totalAdded := 0
+	usersProcessed := 0
+
+	for rows.Next() {
+		var npub string
+		if err := rows.Scan(&npub); err != nil {
+			continue
+		}
+
+		added, err := relayDiscoverer.DiscoverAndAddUserRelays(r.Context(), npub)
+		if err != nil {
+			continue
+		}
+
+		totalAdded += added
+		usersProcessed++
+	}
+
+	database.LogActivity("relays_bulk_discovered", "")
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"users_processed": usersProcessed,
+		"relays_added":    totalAdded,
+		"status":          "discovered",
 	})
 }

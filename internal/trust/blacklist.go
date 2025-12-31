@@ -1,8 +1,8 @@
 package trust
 
 import (
-	"github.com/lighthouse-client/lighthouse/internal/database"
-	"github.com/lighthouse-client/lighthouse/internal/models"
+	"github.com/gmonarque/lighthouse/internal/database"
+	"github.com/gmonarque/lighthouse/internal/models"
 	"github.com/rs/zerolog/log"
 )
 

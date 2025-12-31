@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/lighthouse-client/lighthouse/internal/config"
-	"github.com/lighthouse-client/lighthouse/internal/database"
-	"github.com/lighthouse-client/lighthouse/internal/nostr"
+	"github.com/gmonarque/lighthouse/internal/config"
+	"github.com/gmonarque/lighthouse/internal/database"
+	"github.com/gmonarque/lighthouse/internal/nostr"
 )
 
 // GetSettings returns current application settings
@@ -45,6 +45,14 @@ func GetSettings(w http.ResponseWriter, r *http.Request) {
 		"indexer": map[string]interface{}{
 			"tag_filter":         cfg.Indexer.TagFilter,
 			"tag_filter_enabled": cfg.Indexer.TagFilterEnabled,
+		},
+		"relay": map[string]interface{}{
+			"enabled":          cfg.Relay.Enabled,
+			"listen":           cfg.Relay.Listen,
+			"mode":             cfg.Relay.Mode,
+			"require_curation": cfg.Relay.RequireCuration,
+			"sync_with":        cfg.Relay.SyncWith,
+			"enable_discovery": cfg.Relay.EnableDiscovery,
 		},
 	})
 }
@@ -203,10 +211,10 @@ func GetSetupStatus(w http.ResponseWriter, r *http.Request) {
 	setupCompleted, _ := database.GetSetting("setup_completed")
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"completed":         setupCompleted == "true",
-		"has_identity":      cfg.Nostr.Identity.Npub != "",
-		"has_relays":        len(cfg.Nostr.Relays) > 0,
-		"has_tmdb_key":      cfg.Enrichment.TMDBAPIKey != "",
+		"completed":          setupCompleted == "true",
+		"has_identity":       cfg.Nostr.Identity.Npub != "",
+		"has_relays":         len(cfg.Nostr.Relays) > 0,
+		"has_tmdb_key":       cfg.Enrichment.TMDBAPIKey != "",
 		"enrichment_enabled": cfg.Enrichment.Enabled,
 	})
 }

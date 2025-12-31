@@ -1,0 +1,45 @@
+title: Lighthouse Documentation
+description: Self-hosted Nostr indexer for NIP-35 torrent events with federated curation
+baseurl: "/lighthouse"
+url: "https://gmonarque.github.io"
+
+theme: jekyll-theme-minimal
+
+markdown: kramdown
+highlighter: rouge
+
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+
+plugins:
+  - jekyll-relative-links
+  - jekyll-seo-tag
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+
+navigation:
+  - title: Home
+    url: /
+  - title: Getting Started
+    url: /getting-started
+  - title: Installation
+    url: /installation
+  - title: Configuration
+    url: /configuration
+  - title: Architecture
+    url: /architecture
+  - title: API Reference
+    url: /api-reference
+  - title: Web of Trust
+    url: /web-of-trust
+  - title: Curation
+    url: /curation
+  - title: Federation
+    url: /federation
+  - title: Development
+    url: /development

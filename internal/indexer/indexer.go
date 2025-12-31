@@ -6,9 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lighthouse-client/lighthouse/internal/config"
-	"github.com/lighthouse-client/lighthouse/internal/database"
-	"github.com/lighthouse-client/lighthouse/internal/nostr"
+	"github.com/gmonarque/lighthouse/internal/config"
+	"github.com/gmonarque/lighthouse/internal/database"
+	"github.com/gmonarque/lighthouse/internal/nostr"
+	"github.com/gmonarque/lighthouse/internal/trust"
 	gonostr "github.com/nbd-wtf/go-nostr"
 	"github.com/rs/zerolog/log"
 )
@@ -64,9 +65,35 @@ func (idx *Indexer) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Subscribe to torrent events
-	since := time.Now().Add(-24 * time.Hour) // Start with last 24 hours
-	err := idx.relayManager.SubscribeTorrents(idx.ctx, since, func(event *gonostr.Event, relayURL string) {
+	// Get trusted uploaders and subscribe specifically for their events
+	// This is more efficient than fetching all events and filtering locally
+	wot := trust.NewWebOfTrust()
+	trustedUploaders, err := wot.GetTrustedUploaders()
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get trusted uploaders")
+		return err
+	}
+
+	if len(trustedUploaders) == 0 {
+		log.Warn().Msg("No trusted uploaders configured - indexer will not fetch any torrents")
+		return nil
+	}
+
+	// Convert npubs to hex pubkeys for the subscription filter
+	var trustedPubkeys []string
+	for _, npub := range trustedUploaders {
+		pubkey, err := nostr.NpubToHex(npub)
+		if err != nil {
+			log.Warn().Str("npub", npub).Err(err).Msg("Failed to convert npub to hex")
+			continue
+		}
+		trustedPubkeys = append(trustedPubkeys, pubkey)
+	}
+
+	log.Info().Int("trusted_uploaders", len(trustedPubkeys)).Msg("Subscribing to trusted uploaders")
+
+	// Subscribe to torrent events from trusted uploaders only
+	err = idx.relayManager.SubscribeTrustedTorrents(idx.ctx, trustedPubkeys, func(event *gonostr.Event, relayURL string) {
 		idx.processEvent(event, relayURL)
 	})
 	if err != nil {
@@ -124,7 +151,13 @@ func (idx *Indexer) processEvent(event *gonostr.Event, relayURL string) {
 	idx.mu.Lock()
 	idx.stats.EventsReceived++
 	idx.stats.LastEventAt = time.Now()
+	eventsReceived := idx.stats.EventsReceived
 	idx.mu.Unlock()
+
+	// Log every 100 events for visibility
+	if eventsReceived%100 == 0 {
+		log.Info().Int64("events_received", eventsReceived).Str("relay", relayURL).Msg("Processing events")
+	}
 
 	// Parse the event
 	torrentEvent, err := nostr.ParseTorrentEvent(event)
@@ -144,6 +177,13 @@ func (idx *Indexer) processEvent(event *gonostr.Event, relayURL string) {
 		return
 	}
 
+	// Check if uploader is trusted (whitelist + follows based on trust depth)
+	if !idx.isTrusted(torrentEvent.Pubkey) {
+		// Only log occasionally to avoid spam
+		log.Debug().Str("pubkey", torrentEvent.Pubkey).Msg("Skipping untrusted uploader")
+		return
+	}
+
 	// Check tag filter
 	if !idx.matchesTagFilter(torrentEvent) {
 		log.Debug().
@@ -152,6 +192,13 @@ func (idx *Indexer) processEvent(event *gonostr.Event, relayURL string) {
 			Msg("Skipping torrent that doesn't match tag filter")
 		return
 	}
+
+	// Log trusted events that pass all filters
+	log.Info().
+		Str("info_hash", torrentEvent.InfoHash).
+		Str("name", torrentEvent.Name).
+		Str("pubkey", torrentEvent.Pubkey[:16]+"...").
+		Msg("Indexing trusted torrent")
 
 	// Process with deduplicator
 	isNew, err := idx.deduplicator.Process(torrentEvent, relayURL)
@@ -184,6 +231,42 @@ func (idx *Indexer) isBlacklisted(pubkey string) bool {
 		return false
 	}
 	return count > 0
+}
+
+// isTrusted checks if a pubkey is trusted based on whitelist and trust depth
+func (idx *Indexer) isTrusted(pubkey string) bool {
+	wot := trust.NewWebOfTrust()
+	trustedUploaders, err := wot.GetTrustedUploaders()
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get trusted uploaders")
+		return false
+	}
+
+	// If no trusted uploaders configured, reject all (strict mode)
+	if len(trustedUploaders) == 0 {
+		return false
+	}
+
+	// Convert pubkey to npub for comparison if needed
+	npub, err := nostr.HexToNpub(pubkey)
+	if err != nil {
+		npub = pubkey // Use as-is if conversion fails
+	}
+
+	// Check if pubkey (hex) or npub is in trusted list
+	for _, trusted := range trustedUploaders {
+		// Convert trusted npub to hex for comparison
+		trustedHex, err := nostr.NpubToHex(trusted)
+		if err != nil {
+			trustedHex = trusted
+		}
+
+		if pubkey == trustedHex || pubkey == trusted || npub == trusted {
+			return true
+		}
+	}
+
+	return false
 }
 
 // matchesTagFilter checks if a torrent matches the configured tag filter
@@ -284,10 +367,36 @@ func (idx *Indexer) FetchHistorical(days int) error {
 		return nil
 	}
 
-	since := time.Now().AddDate(0, 0, -days)
-	log.Info().Int("days", days).Msg("Fetching historical torrents")
+	// Get trusted uploaders
+	wot := trust.NewWebOfTrust()
+	trustedUploaders, err := wot.GetTrustedUploaders()
+	if err != nil {
+		return err
+	}
 
-	return idx.relayManager.SubscribeTorrents(idx.ctx, since, func(event *gonostr.Event, relayURL string) {
+	if len(trustedUploaders) == 0 {
+		log.Warn().Msg("No trusted uploaders configured")
+		return nil
+	}
+
+	// Convert npubs to hex pubkeys
+	var trustedPubkeys []string
+	for _, npub := range trustedUploaders {
+		pubkey, err := nostr.NpubToHex(npub)
+		if err != nil {
+			continue
+		}
+		trustedPubkeys = append(trustedPubkeys, pubkey)
+	}
+
+	if days == 0 {
+		log.Info().Int("uploaders", len(trustedPubkeys)).Msg("Fetching all historical torrents from trusted uploaders")
+	} else {
+		log.Info().Int("days", days).Int("uploaders", len(trustedPubkeys)).Msg("Fetching historical torrents from trusted uploaders")
+	}
+
+	// Re-subscribe to get fresh data from trusted uploaders
+	return idx.relayManager.SubscribeTrustedTorrents(idx.ctx, trustedPubkeys, func(event *gonostr.Event, relayURL string) {
 		idx.processEvent(event, relayURL)
 	})
 }

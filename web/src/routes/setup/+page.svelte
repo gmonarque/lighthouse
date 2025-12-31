@@ -23,7 +23,7 @@
 	// Step 1: Identity
 	let identityChoice: 'generate' | 'import' = 'generate';
 	let importNsec = '';
-	let generatedIdentity: { npub: string; nsec: string } | null = null;
+	let generatedIdentity: { npub: string; nsec?: string } | null = null;
 
 	// Step 2: Relays
 	let selectedPreset = 'public';
@@ -279,8 +279,9 @@
 
 					<div class="space-y-4">
 						<div>
-							<label class="label">TMDB API Key (Optional)</label>
+							<label class="label" for="setup-tmdb-key">TMDB API Key (Optional)</label>
 							<input
+								id="setup-tmdb-key"
 								type="text"
 								bind:value={tmdbApiKey}
 								placeholder="Enter your TMDB API key"
@@ -292,8 +293,9 @@
 						</div>
 
 						<div>
-							<label class="label">OMDB API Key (Optional)</label>
+							<label class="label" for="setup-omdb-key">OMDB API Key (Optional)</label>
 							<input
+								id="setup-omdb-key"
 								type="text"
 								bind:value={omdbApiKey}
 								placeholder="Enter your OMDB API key"

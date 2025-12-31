@@ -9,12 +9,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lighthouse-client/lighthouse/internal/api"
-	"github.com/lighthouse-client/lighthouse/internal/api/handlers"
-	"github.com/lighthouse-client/lighthouse/internal/config"
-	"github.com/lighthouse-client/lighthouse/internal/database"
-	"github.com/lighthouse-client/lighthouse/internal/indexer"
-	"github.com/lighthouse-client/lighthouse/internal/nostr"
+	"github.com/gmonarque/lighthouse/internal/api"
+	"github.com/gmonarque/lighthouse/internal/api/handlers"
+	"github.com/gmonarque/lighthouse/internal/api/middleware"
+	"github.com/gmonarque/lighthouse/internal/comments"
+	"github.com/gmonarque/lighthouse/internal/config"
+	"github.com/gmonarque/lighthouse/internal/database"
+	"github.com/gmonarque/lighthouse/internal/decision"
+	"github.com/gmonarque/lighthouse/internal/indexer"
+	"github.com/gmonarque/lighthouse/internal/moderation"
+	"github.com/gmonarque/lighthouse/internal/nostr"
+	"github.com/gmonarque/lighthouse/internal/ruleset"
+	"github.com/gmonarque/lighthouse/internal/trust"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -55,6 +61,11 @@ func main() {
 	}
 	defer database.Close()
 
+	// Initialize API key storage
+	if err := middleware.InitAPIKeyStorage(); err != nil {
+		log.Warn().Err(err).Msg("Failed to initialize API key storage")
+	}
+
 	// Seed default relays from config
 	defaultRelays := make([]database.RelayConfig, len(cfg.Nostr.Relays))
 	for i, r := range cfg.Nostr.Relays {
@@ -84,6 +95,17 @@ func main() {
 	handlers.SetIndexerController(idx)
 	handlers.SetRelayLoader(relayManager)
 	handlers.SetPublisher(relayManager)
+	handlers.SetRelayDiscoverer(relayManager)
+
+	// Initialize trust policy storage for curator management
+	policyStorage := trust.NewPolicyStorage()
+	handlers.SetTrustPolicyStorage(policyStorage)
+
+	// Initialize other storages for handlers
+	handlers.SetCommentStorage(comments.NewStorage())
+	handlers.SetReportStorage(moderation.NewStorage())
+	handlers.SetDecisionStorage(decision.NewStorage())
+	handlers.SetRulesetStorage(ruleset.NewStorage())
 
 	// Create router
 	router := api.NewRouter(cfg)

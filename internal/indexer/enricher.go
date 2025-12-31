@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lighthouse-client/lighthouse/internal/config"
-	"github.com/lighthouse-client/lighthouse/internal/database"
+	"github.com/gmonarque/lighthouse/internal/config"
+	"github.com/gmonarque/lighthouse/internal/database"
 	"github.com/rs/zerolog/log"
 )
 

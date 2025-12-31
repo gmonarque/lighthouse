@@ -7,9 +7,9 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/lighthouse-client/lighthouse/internal/config"
-	"github.com/lighthouse-client/lighthouse/internal/database"
-	"github.com/lighthouse-client/lighthouse/internal/nostr"
+	"github.com/gmonarque/lighthouse/internal/config"
+	"github.com/gmonarque/lighthouse/internal/database"
+	"github.com/gmonarque/lighthouse/internal/nostr"
 	gonostr "github.com/nbd-wtf/go-nostr"
 )
 
@@ -54,22 +54,22 @@ func ParseTorrentFile(w http.ResponseWriter, r *http.Request) {
 
 // PublishTorrentRequest is the request body for publishing a torrent
 type PublishTorrentRequest struct {
-	InfoHash    string             `json:"info_hash"`
-	Name        string             `json:"name"`
-	Size        int64              `json:"size"`
-	Category    int                `json:"category"`
+	InfoHash    string              `json:"info_hash"`
+	Name        string              `json:"name"`
+	Size        int64               `json:"size"`
+	Category    int                 `json:"category"`
 	Files       []nostr.TorrentFile `json:"files"`
-	Trackers    []string           `json:"trackers"`
-	Tags        []string           `json:"tags"`
-	Description string             `json:"description"`
-	ImdbID      string             `json:"imdb_id"`
-	TmdbID      string             `json:"tmdb_id"`
-	RelayIDs    []int              `json:"relay_ids"`
+	Trackers    []string            `json:"trackers"`
+	Tags        []string            `json:"tags"`
+	Description string              `json:"description"`
+	ImdbID      string              `json:"imdb_id"`
+	TmdbID      string              `json:"tmdb_id"`
+	RelayIDs    []int               `json:"relay_ids"`
 }
 
 // PublishTorrentResponse is the response after publishing
 type PublishTorrentResponse struct {
-	EventID string               `json:"event_id"`
+	EventID string                `json:"event_id"`
 	Results []nostr.PublishResult `json:"results"`
 }
 
