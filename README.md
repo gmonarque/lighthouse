@@ -35,7 +35,7 @@ Needs Go 1.22+ and Node.js 20+
 git clone https://github.com/gmonarque/lighthouse.git
 cd lighthouse
 make build
-./lighthouse
+./build/lighthouse
 ```
 
 ### Docker 
