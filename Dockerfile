@@ -1,17 +1,20 @@
 # Build stage - Frontend
 FROM node:20-alpine AS frontend-builder
 
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
 WORKDIR /app/web
 
 # Copy frontend files
-COPY web/package*.json ./
-RUN npm ci
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
 COPY web/ ./
-RUN npm run build
+RUN pnpm run build
 
 # Build stage - Backend
-FROM golang:1.22-alpine AS backend-builder
+FROM golang:1.23-alpine AS backend-builder
 
 # Install build dependencies
 RUN apk add --no-cache gcc musl-dev sqlite-dev
