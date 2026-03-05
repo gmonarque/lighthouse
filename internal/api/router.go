@@ -29,9 +29,6 @@ func NewRouter(cfg *config.Config) *chi.Mux {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
 
-	// Rate limiting by IP (applies to all requests)
-	r.Use(apiMiddleware.RateLimitByIP)
-
 	// CORS configuration
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
@@ -47,6 +44,9 @@ func NewRouter(cfg *config.Config) *chi.Mux {
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
+		// Rate limiting by IP (applies to all API requests)
+		r.Use(apiMiddleware.RateLimitByIP)
+
 		// Public endpoints (no auth required)
 		r.Group(func(r chi.Router) {
 			// Torznab API - uses query param apikey with stricter rate limit
