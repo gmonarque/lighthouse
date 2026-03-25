@@ -236,10 +236,11 @@ func (rm *RelayManager) SubscribeTrustedTorrents(ctx context.Context, pubkeys []
 	return rm.SubscribeAll(ctx, filters, handler)
 }
 
-// FetchAllHistoricalTorrents fetches the complete history of torrent events from trusted authors
-// by paginating through all pages using the Until filter (newest-first, decreasing Until per page).
-// This bypasses the relay's per-subscription event limit (typically 500).
-func (rm *RelayManager) FetchAllHistoricalTorrents(ctx context.Context, pubkeys []string, handler func(*nostr.Event, string)) error {
+// FetchAllHistoricalTorrents fetches torrent events from trusted authors by paginating
+// through pages using the Until filter (newest-first, decreasing Until per page).
+// If sinceTimestamp > 0, only fetches events newer than that unix timestamp,
+// allowing resumption from where the last fetch left off.
+func (rm *RelayManager) FetchAllHistoricalTorrents(ctx context.Context, pubkeys []string, sinceTimestamp int64, handler func(*nostr.Event, string)) error {
 	if len(pubkeys) == 0 {
 		return errors.New("no pubkeys provided")
 	}
@@ -253,9 +254,14 @@ func (rm *RelayManager) FetchAllHistoricalTorrents(ctx context.Context, pubkeys 
 
 	for _, client := range clients {
 		url := client.URL()
-		log.Info().Str("relay", url).Msg("Fetching full historical torrents (paginated)")
+		log.Info().Str("relay", url).Int64("since", sinceTimestamp).Msg("Fetching historical torrents (paginated)")
 
 		var until *nostr.Timestamp
+		var since *nostr.Timestamp
+		if sinceTimestamp > 0 {
+			s := nostr.Timestamp(sinceTimestamp)
+			since = &s
+		}
 		totalFetched := 0
 		page := 0
 
@@ -267,6 +273,9 @@ func (rm *RelayManager) FetchAllHistoricalTorrents(ctx context.Context, pubkeys 
 			}
 			if until != nil {
 				filter.Until = until
+			}
+			if since != nil {
+				filter.Since = since
 			}
 
 			events, err := client.QueryEvents(ctx, []nostr.Filter{filter})
