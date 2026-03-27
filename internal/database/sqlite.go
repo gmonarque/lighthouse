@@ -313,13 +313,19 @@ func GetTorrentsPerDay(days int) ([]map[string]interface{}, error) {
 	return stats, nil
 }
 
-// GetLatestEventTimestamp returns the unix timestamp of the most recently uploaded event.
-// Used to resume historical fetch from where we left off.
+// GetLatestEventTimestamp returns a unix timestamp to resume historical fetch from.
+// Uses MAX(first_seen_at) from torrents (indexed, fast) minus a 1-hour buffer to
+// account for clock skew between local time and relay event timestamps, and to
+// catch any late-arriving events. This means a small overlap is re-processed on
+// restart, which is safe since the deduplicator handles duplicates.
 func GetLatestEventTimestamp() (int64, error) {
 	var ts int64
 	err := db.QueryRow(`
-		SELECT COALESCE(MAX(strftime('%s', uploaded_at)), 0) FROM torrent_uploads
+		SELECT COALESCE(MAX(strftime('%s', first_seen_at)), 0) FROM torrents
 	`).Scan(&ts)
+	if ts > 3600 {
+		ts -= 3600 // 1-hour buffer for clock skew and late arrivals
+	}
 	return ts, err
 }
 

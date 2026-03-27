@@ -296,8 +296,14 @@ func (rm *RelayManager) FetchAllHistoricalTorrents(ctx context.Context, pubkeys 
 			page++
 			log.Info().Str("relay", url).Int("page", page).Int("batch", len(events)).Int("total", totalFetched).Msg("Historical page fetched")
 
-			// Advance Until to just before the oldest event in this batch
-			oldest := events[len(events)-1].CreatedAt - 1
+			// Advance Until to the oldest event's timestamp in this batch.
+			// Using the exact timestamp (not -1) avoids skipping events that
+			// share the same second. The deduplicator handles any overlap.
+			oldest := events[len(events)-1].CreatedAt
+			if until != nil && oldest == *until {
+				// Same timestamp as last page — we've exhausted this second
+				oldest--
+			}
 			until = &oldest
 		}
 

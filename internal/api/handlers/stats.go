@@ -73,13 +73,14 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 		}
 		trustPlaceholders += ")"
 
-		// Drive queries from torrent_uploads (196MB) instead of scanning torrents (2.3GB).
+		// Drive queries from torrent_uploads (much smaller than torrents).
 		// torrent_uploads is filtered by uploader via index, then JOINed to torrents by PK.
+		// Use COUNT(DISTINCT) to avoid overcounting torrents with multiple uploads.
 
-		// Count + total size in a single query (avoids two separate full scans)
+		// Count distinct torrents + total size in a single query
 		var totalTorrents int64
 		var totalSize sql.NullInt64
-		summaryQuery := `SELECT COUNT(*), COALESCE(SUM(t.size), 0)
+		summaryQuery := `SELECT COUNT(DISTINCT tu.torrent_id), COALESCE(SUM(t.size), 0)
 			FROM torrents t INNER JOIN torrent_uploads tu ON t.id = tu.torrent_id
 			WHERE tu.uploader_npub IN ` + trustPlaceholders
 		if err := db.QueryRow(summaryQuery, trustArgs...).Scan(&totalTorrents, &totalSize); err != nil {
@@ -90,7 +91,7 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 		stats["total_size"] = totalSize.Int64
 
 		// Categories: same approach, drive from torrent_uploads
-		catQuery := `SELECT t.category, COUNT(*) as count
+		catQuery := `SELECT t.category, COUNT(DISTINCT tu.torrent_id) as count
 			FROM torrents t INNER JOIN torrent_uploads tu ON t.id = tu.torrent_id
 			WHERE tu.uploader_npub IN ` + trustPlaceholders + `
 			GROUP BY t.category`

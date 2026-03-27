@@ -238,8 +238,12 @@ func Search(w http.ResponseWriter, r *http.Request) {
 		}
 		db.QueryRow(countQuery, countArgs...).Scan(&total)
 	} else if category != "" {
-		// Category count: use the category index directly (12ms vs 6.3s with JOIN)
-		// Trust filter passes ~100% of rows, so skipping it is safe and fast
+		// Category count: use the category index directly. An exact trust-filtered
+		// count requires a JOIN across both tables (O(n) full scan), so we use an
+		// approximate count from the category index alone (O(log n) index lookup).
+		// This may slightly overcount if untrusted torrents exist in the category,
+		// but the indexer already filters by trusted authors at ingest time, so
+		// the difference is negligible in practice.
 		if isBaseCategory {
 			db.QueryRow(`SELECT COUNT(*) FROM torrents WHERE category >= ? AND category < ?`,
 				categoryNum, categoryNum+1000).Scan(&total)
@@ -248,8 +252,8 @@ func Search(w http.ResponseWriter, r *http.Request) {
 				categoryNum).Scan(&total)
 		}
 	} else {
-		// No filters: count uploads by trusted uploader (index-only, no JOIN)
-		countQuery := `SELECT COUNT(*) FROM torrent_uploads
+		// No filters: count distinct torrents from trusted uploaders
+		countQuery := `SELECT COUNT(DISTINCT torrent_id) FROM torrent_uploads
 			WHERE uploader_npub IN ` + trustPlaceholders
 		db.QueryRow(countQuery, trustArgs...).Scan(&total)
 	}
