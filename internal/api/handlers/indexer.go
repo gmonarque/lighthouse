@@ -98,7 +98,7 @@ func StopIndexer(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GetIndexerStatus returns the current indexer status
+// GetIndexerStatus returns the current indexer status (lightweight, no heavy queries)
 func GetIndexerStatus(w http.ResponseWriter, r *http.Request) {
 	running := false
 	if indexerController != nil {
@@ -107,14 +107,20 @@ func GetIndexerStatus(w http.ResponseWriter, r *http.Request) {
 
 	enabled, _ := database.GetSetting("indexer_enabled")
 
-	// Get indexing stats
-	stats, _ := database.GetStats()
+	// Use lightweight count queries instead of full GetStats()
+	db := database.Get()
+
+	var totalTorrents int64
+	db.QueryRow("SELECT COUNT(*) FROM torrents").Scan(&totalTorrents)
+
+	var connectedRelays int64
+	db.QueryRow("SELECT COUNT(*) FROM relays WHERE status = 'connected'").Scan(&connectedRelays)
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"running":          running,
 		"enabled":          enabled == "true",
-		"total_torrents":   stats["total_torrents"],
-		"connected_relays": stats["connected_relays"],
+		"total_torrents":   totalTorrents,
+		"connected_relays": connectedRelays,
 	})
 }
 

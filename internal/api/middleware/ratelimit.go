@@ -89,8 +89,8 @@ func (rl *RateLimiter) cleanupLoop() {
 // Default rate limiters
 var (
 	// IPRateLimiter limits requests per IP address
-	// 100 requests per minute per IP
-	IPRateLimiter = NewRateLimiter(100, time.Minute)
+	// 300 requests per minute per IP (dashboard UI makes ~10 API calls per page)
+	IPRateLimiter = NewRateLimiter(300, time.Minute)
 
 	// APIKeyRateLimiter limits requests per API key
 	// 1000 requests per minute per API key

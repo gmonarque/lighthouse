@@ -2,16 +2,36 @@ package handlers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/gmonarque/lighthouse/internal/database"
 	"github.com/gmonarque/lighthouse/internal/nostr"
 	"github.com/gmonarque/lighthouse/internal/trust"
 )
 
-// GetStats returns dashboard statistics (filtered by trust)
+// statsCache caches the expensive stats response (60s TTL)
+var statsCache struct {
+	mu     sync.RWMutex
+	data   []byte
+	expiry time.Time
+}
+
+// GetStats returns dashboard statistics (filtered by trust), cached for 60s
 func GetStats(w http.ResponseWriter, r *http.Request) {
+	// Serve from cache if fresh
+	statsCache.mu.RLock()
+	if time.Now().Before(statsCache.expiry) && statsCache.data != nil {
+		data := statsCache.data
+		statsCache.mu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(data)
+		return
+	}
+	statsCache.mu.RUnlock()
 	db := database.Get()
 
 	// Get trusted uploaders for filtering
@@ -41,7 +61,7 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 		stats["categories"] = make(map[int]int64)
 		stats["recent_torrents"] = []interface{}{}
 	} else {
-		// Build trust filter subquery
+		// Build trust EXISTS subquery (avoids JOIN + DISTINCT overhead)
 		trustPlaceholders := "("
 		trustArgs := make([]interface{}, len(trustedHexPubkeys))
 		for i, u := range trustedHexPubkeys {
@@ -53,32 +73,28 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 		}
 		trustPlaceholders += ")"
 
-		// Total trusted torrents
+		// Drive queries from torrent_uploads (much smaller than torrents).
+		// torrent_uploads is filtered by uploader via index, then JOINed to torrents by PK.
+		// Use COUNT(DISTINCT) to avoid overcounting torrents with multiple uploads.
+
+		// Count distinct torrents + total size in a single query
 		var totalTorrents int64
-		countQuery := `SELECT COUNT(DISTINCT t.id) FROM torrents t
-			JOIN torrent_uploads tu ON t.id = tu.torrent_id
+		var totalSize sql.NullInt64
+		summaryQuery := `SELECT COUNT(DISTINCT tu.torrent_id), COALESCE(SUM(t.size), 0)
+			FROM torrents t INNER JOIN torrent_uploads tu ON t.id = tu.torrent_id
 			WHERE tu.uploader_npub IN ` + trustPlaceholders
-		if err := db.QueryRow(countQuery, trustArgs...).Scan(&totalTorrents); err != nil {
+		if err := db.QueryRow(summaryQuery, trustArgs...).Scan(&totalTorrents, &totalSize); err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to get stats")
 			return
 		}
 		stats["total_torrents"] = totalTorrents
-
-		// Total size (bytes) for trusted torrents
-		var totalSize sql.NullInt64
-		sizeQuery := `SELECT SUM(t.size) FROM torrents t
-			JOIN torrent_uploads tu ON t.id = tu.torrent_id
-			WHERE tu.uploader_npub IN ` + trustPlaceholders
-		if err := db.QueryRow(sizeQuery, trustArgs...).Scan(&totalSize); err != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to get stats")
-			return
-		}
 		stats["total_size"] = totalSize.Int64
 
-		// Torrents by category (trusted only)
-		catQuery := `SELECT t.category, COUNT(DISTINCT t.id) as count FROM torrents t
-			JOIN torrent_uploads tu ON t.id = tu.torrent_id
-			WHERE tu.uploader_npub IN ` + trustPlaceholders + ` GROUP BY t.category`
+		// Categories: same approach, drive from torrent_uploads
+		catQuery := `SELECT t.category, COUNT(DISTINCT tu.torrent_id) as count
+			FROM torrents t INNER JOIN torrent_uploads tu ON t.id = tu.torrent_id
+			WHERE tu.uploader_npub IN ` + trustPlaceholders + `
+			GROUP BY t.category`
 		rows, err := db.Query(catQuery, trustArgs...)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to get stats")
@@ -97,12 +113,16 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 		}
 		stats["categories"] = categories
 
-		// Recent trusted torrents
-		recentQuery := `SELECT DISTINCT t.id, t.info_hash, t.name, t.size, t.category, t.seeders, t.leechers,
+		// Recent 10: EXISTS with first_seen_at index is fast for small LIMIT
+		trustExistsClause := `EXISTS (
+			SELECT 1 FROM torrent_uploads tu
+			WHERE tu.torrent_id = t.id
+			AND tu.uploader_npub IN ` + trustPlaceholders + `
+		)`
+		recentQuery := `SELECT t.id, t.info_hash, t.name, t.size, t.category, t.seeders, t.leechers,
 			t.title, t.year, t.poster_url, t.trust_score, t.first_seen_at
 			FROM torrents t
-			JOIN torrent_uploads tu ON t.id = tu.torrent_id
-			WHERE tu.uploader_npub IN ` + trustPlaceholders + `
+			WHERE ` + trustExistsClause + `
 			ORDER BY t.first_seen_at DESC LIMIT 10`
 		recentRows, err := db.Query(recentQuery, trustArgs...)
 		if err != nil {
@@ -163,29 +183,16 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 	}
 	stats["blacklist_count"] = blacklistCount
 
-	// Unique uploaders should also be filtered by trust
-	var uniqueUploaders int64
-	if len(trustedHexPubkeys) > 0 {
-		// Build placeholder string for IN clause
-		uploaderPlaceholders := "("
-		uploaderArgs := make([]interface{}, len(trustedHexPubkeys))
-		for i, u := range trustedHexPubkeys {
-			if i > 0 {
-				uploaderPlaceholders += ","
-			}
-			uploaderPlaceholders += "?"
-			uploaderArgs[i] = u
-		}
-		uploaderPlaceholders += ")"
+	// Unique uploaders (just count trusted pubkeys directly — no DB query needed)
+	stats["unique_uploaders"] = int64(len(trustedHexPubkeys))
 
-		uploaderQuery := `SELECT COUNT(DISTINCT uploader_npub) FROM torrent_uploads WHERE uploader_npub IN ` + uploaderPlaceholders
-		if err := db.QueryRow(uploaderQuery, uploaderArgs...).Scan(&uniqueUploaders); err != nil {
-			uniqueUploaders = 0
-		}
-	} else {
-		uniqueUploaders = 0
+	// Cache the result for 60 seconds
+	if jsonData, err := json.Marshal(stats); err == nil {
+		statsCache.mu.Lock()
+		statsCache.data = jsonData
+		statsCache.expiry = time.Now().Add(60 * time.Second)
+		statsCache.mu.Unlock()
 	}
-	stats["unique_uploaders"] = uniqueUploaders
 
 	respondJSON(w, http.StatusOK, stats)
 }
@@ -229,7 +236,7 @@ func GetStatsChart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build trust filter
+	// Build trust EXISTS subquery
 	trustPlaceholders := "("
 	trustArgs := make([]interface{}, len(trustedHexPubkeys)+1)
 	trustArgs[0] = days
@@ -242,9 +249,9 @@ func GetStatsChart(w http.ResponseWriter, r *http.Request) {
 	}
 	trustPlaceholders += ")"
 
-	query := `SELECT DATE(t.first_seen_at) as date, COUNT(DISTINCT t.id) as count
-		FROM torrents t
-		JOIN torrent_uploads tu ON t.id = tu.torrent_id
+	// Drive from torrent_uploads, join torrents only for first_seen_at
+	query := `SELECT DATE(t.first_seen_at) as date, COUNT(*) as count
+		FROM torrents t INNER JOIN torrent_uploads tu ON t.id = tu.torrent_id
 		WHERE t.first_seen_at >= DATE('now', '-' || ? || ' days')
 		AND tu.uploader_npub IN ` + trustPlaceholders + `
 		GROUP BY DATE(t.first_seen_at)

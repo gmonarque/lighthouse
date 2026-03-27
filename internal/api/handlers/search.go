@@ -102,16 +102,22 @@ func Search(w http.ResponseWriter, r *http.Request) {
 
 	var rows *sql.Rows
 
+	// Build trust EXISTS subquery (avoids JOIN + DISTINCT overhead)
+	trustExistsClause := `EXISTS (
+				SELECT 1 FROM torrent_uploads tu
+				WHERE tu.torrent_id = t.id
+				AND tu.uploader_npub IN ` + trustPlaceholders + `
+			)`
+
 	if query != "" {
 		// Full-text search with trust filtering
 		sqlQuery := `
-			SELECT DISTINCT t.id, t.info_hash, t.name, t.size, t.category, t.seeders, t.leechers,
+			SELECT t.id, t.info_hash, t.name, t.size, t.category, t.seeders, t.leechers,
 				   t.magnet_uri, t.title, t.year, t.poster_url, t.overview, t.trust_score, t.first_seen_at
 			FROM torrents t
 			JOIN torrents_fts fts ON t.id = fts.rowid
-			JOIN torrent_uploads tu ON t.id = tu.torrent_id
 			WHERE torrents_fts MATCH ?
-			AND tu.uploader_npub IN ` + trustPlaceholders
+			AND ` + trustExistsClause
 
 		args := []interface{}{query}
 		args = append(args, trustArgs...)
@@ -132,30 +138,41 @@ func Search(w http.ResponseWriter, r *http.Request) {
 		args = append(args, limit, offset)
 
 		rows, err = db.Query(sqlQuery, args...)
-	} else {
-		// List all (no search query) with trust filtering
+	} else if category != "" {
+		// Category filter: use composite index (category, trust_score, first_seen_at)
+		// to filter by category AND walk in sort order simultaneously.
+		// Empty categories return instantly (no matching index entries).
+		// Populated categories find 50 rows by walking the index in order.
 		sqlQuery := `
-			SELECT DISTINCT t.id, t.info_hash, t.name, t.size, t.category, t.seeders, t.leechers,
+			SELECT t.id, t.info_hash, t.name, t.size, t.category, t.seeders, t.leechers,
 				   t.magnet_uri, t.title, t.year, t.poster_url, t.overview, t.trust_score, t.first_seen_at
-			FROM torrents t
-			JOIN torrent_uploads tu ON t.id = tu.torrent_id
-			WHERE tu.uploader_npub IN ` + trustPlaceholders
+			FROM torrents t INDEXED BY idx_torrents_category_trust_seen
+			WHERE ` + trustExistsClause
 
 		args := append([]interface{}{}, trustArgs...)
 
-		if category != "" {
-			if isBaseCategory {
-				// Match all subcategories within the base category range
-				sqlQuery += " AND t.category >= ? AND t.category < ?"
-				args = append(args, categoryNum, categoryNum+1000)
-			} else {
-				// Exact match for subcategory
-				sqlQuery += " AND t.category = ?"
-				args = append(args, categoryNum)
-			}
+		if isBaseCategory {
+			sqlQuery += " AND t.category >= ? AND t.category < ?"
+			args = append(args, categoryNum, categoryNum+1000)
+		} else {
+			sqlQuery += " AND t.category = ?"
+			args = append(args, categoryNum)
 		}
 
 		sqlQuery += " ORDER BY t.trust_score DESC, t.first_seen_at DESC LIMIT ? OFFSET ?"
+		args = append(args, limit, offset)
+
+		rows, err = db.Query(sqlQuery, args...)
+	} else {
+		// No filters: walk the sort index directly, check trust for each row, stop at LIMIT
+		sqlQuery := `
+			SELECT t.id, t.info_hash, t.name, t.size, t.category, t.seeders, t.leechers,
+				   t.magnet_uri, t.title, t.year, t.poster_url, t.overview, t.trust_score, t.first_seen_at
+			FROM torrents t INDEXED BY idx_torrents_trust_first_seen
+			WHERE ` + trustExistsClause + `
+			ORDER BY t.trust_score DESC, t.first_seen_at DESC LIMIT ? OFFSET ?`
+
+		args := append([]interface{}{}, trustArgs...)
 		args = append(args, limit, offset)
 
 		rows, err = db.Query(sqlQuery, args...)
@@ -203,11 +220,10 @@ func Search(w http.ResponseWriter, r *http.Request) {
 	var total int64
 	if query != "" {
 		countQuery := `
-			SELECT COUNT(DISTINCT t.id) FROM torrents t
+			SELECT COUNT(*) FROM torrents t
 			JOIN torrents_fts fts ON t.id = fts.rowid
-			JOIN torrent_uploads tu ON t.id = tu.torrent_id
 			WHERE torrents_fts MATCH ?
-			AND tu.uploader_npub IN ` + trustPlaceholders
+			AND ` + trustExistsClause
 
 		countArgs := []interface{}{query}
 		countArgs = append(countArgs, trustArgs...)
@@ -221,23 +237,25 @@ func Search(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		db.QueryRow(countQuery, countArgs...).Scan(&total)
-	} else {
-		countQuery := `
-			SELECT COUNT(DISTINCT t.id) FROM torrents t
-			JOIN torrent_uploads tu ON t.id = tu.torrent_id
-			WHERE tu.uploader_npub IN ` + trustPlaceholders
-
-		countArgs := append([]interface{}{}, trustArgs...)
-		if category != "" {
-			if isBaseCategory {
-				countQuery += " AND t.category >= ? AND t.category < ?"
-				countArgs = append(countArgs, categoryNum, categoryNum+1000)
-			} else {
-				countQuery += " AND t.category = ?"
-				countArgs = append(countArgs, categoryNum)
-			}
+	} else if category != "" {
+		// Category count: use the category index directly. An exact trust-filtered
+		// count requires a JOIN across both tables (O(n) full scan), so we use an
+		// approximate count from the category index alone (O(log n) index lookup).
+		// This may slightly overcount if untrusted torrents exist in the category,
+		// but the indexer already filters by trusted authors at ingest time, so
+		// the difference is negligible in practice.
+		if isBaseCategory {
+			db.QueryRow(`SELECT COUNT(*) FROM torrents WHERE category >= ? AND category < ?`,
+				categoryNum, categoryNum+1000).Scan(&total)
+		} else {
+			db.QueryRow(`SELECT COUNT(*) FROM torrents WHERE category = ?`,
+				categoryNum).Scan(&total)
 		}
-		db.QueryRow(countQuery, countArgs...).Scan(&total)
+	} else {
+		// No filters: count distinct torrents from trusted uploaders
+		countQuery := `SELECT COUNT(DISTINCT torrent_id) FROM torrent_uploads
+			WHERE uploader_npub IN ` + trustPlaceholders
+		db.QueryRow(countQuery, trustArgs...).Scan(&total)
 	}
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{

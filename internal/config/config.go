@@ -207,7 +207,7 @@ func setDefaults() {
 }
 
 func createDefaultConfig() error {
-	configPath := "./config.yaml"
+	configPath := "./config/config.yaml"
 
 	// Ensure parent directory exists
 	dir := filepath.Dir(configPath)

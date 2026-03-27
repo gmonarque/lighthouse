@@ -236,6 +236,83 @@ func (rm *RelayManager) SubscribeTrustedTorrents(ctx context.Context, pubkeys []
 	return rm.SubscribeAll(ctx, filters, handler)
 }
 
+// FetchAllHistoricalTorrents fetches torrent events from trusted authors by paginating
+// through pages using the Until filter (newest-first, decreasing Until per page).
+// If sinceTimestamp > 0, only fetches events newer than that unix timestamp,
+// allowing resumption from where the last fetch left off.
+func (rm *RelayManager) FetchAllHistoricalTorrents(ctx context.Context, pubkeys []string, sinceTimestamp int64, handler func(*nostr.Event, string)) error {
+	if len(pubkeys) == 0 {
+		return errors.New("no pubkeys provided")
+	}
+
+	clients := rm.GetConnectedClients()
+	if len(clients) == 0 {
+		return errors.New("no connected relays")
+	}
+
+	const pageSize = 500
+
+	for _, client := range clients {
+		url := client.URL()
+		log.Info().Str("relay", url).Int64("since", sinceTimestamp).Msg("Fetching historical torrents (paginated)")
+
+		var until *nostr.Timestamp
+		var since *nostr.Timestamp
+		if sinceTimestamp > 0 {
+			s := nostr.Timestamp(sinceTimestamp)
+			since = &s
+		}
+		totalFetched := 0
+		page := 0
+
+		for {
+			filter := nostr.Filter{
+				Kinds:   []int{KindTorrent},
+				Authors: pubkeys,
+				Limit:   pageSize,
+			}
+			if until != nil {
+				filter.Until = until
+			}
+			if since != nil {
+				filter.Since = since
+			}
+
+			events, err := client.QueryEvents(ctx, []nostr.Filter{filter})
+			if err != nil {
+				log.Error().Err(err).Str("relay", url).Int("page", page).Msg("Failed to query historical events")
+				break
+			}
+
+			if len(events) == 0 {
+				break
+			}
+
+			for _, event := range events {
+				handler(event, url)
+			}
+
+			totalFetched += len(events)
+			page++
+			log.Info().Str("relay", url).Int("page", page).Int("batch", len(events)).Int("total", totalFetched).Msg("Historical page fetched")
+
+			// Advance Until to the oldest event's timestamp in this batch.
+			// Using the exact timestamp (not -1) avoids skipping events that
+			// share the same second. The deduplicator handles any overlap.
+			oldest := events[len(events)-1].CreatedAt
+			if until != nil && oldest == *until {
+				// Same timestamp as last page — we've exhausted this second
+				oldest--
+			}
+			until = &oldest
+		}
+
+		log.Info().Str("relay", url).Int("total", totalFetched).Msg("Historical fetch complete")
+	}
+
+	return nil
+}
+
 // FetchContactList fetches contact list from any connected relay
 func (rm *RelayManager) FetchContactList(ctx context.Context, pubkey string) (*nostr.Event, error) {
 	clients := rm.GetConnectedClients()

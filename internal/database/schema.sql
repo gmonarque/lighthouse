@@ -341,6 +341,15 @@ CREATE INDEX IF NOT EXISTS idx_relay_events_created ON relay_events(created_at D
 CREATE INDEX IF NOT EXISTS idx_activity_log_type ON activity_log(event_type);
 CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at DESC);
 
+-- Composite indexes for performance optimization
+CREATE INDEX IF NOT EXISTS idx_torrents_trust_first_seen ON torrents(trust_score DESC, first_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_torrent_uploads_uploader_torrent ON torrent_uploads(uploader_npub, torrent_id);
+CREATE INDEX IF NOT EXISTS idx_torrents_imdb ON torrents(imdb_id);
+CREATE INDEX IF NOT EXISTS idx_torrents_tmdb ON torrents(tmdb_id);
+CREATE INDEX IF NOT EXISTS idx_activity_log_type_created ON activity_log(event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_comments_infohash_created ON torrent_comments(infohash, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_torrents_category_trust_seen ON torrents(category, trust_score DESC, first_seen_at DESC);
+
 -- =====================================================
 -- DEFAULT SETTINGS
 -- =====================================================

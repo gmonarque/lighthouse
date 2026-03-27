@@ -5,17 +5,40 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/gmonarque/lighthouse/internal/api/apikeys"
+	"github.com/gmonarque/lighthouse/internal/api/middleware"
 	"github.com/gmonarque/lighthouse/internal/config"
 	"github.com/gmonarque/lighthouse/internal/torznab"
 )
 
 // Torznab handles all Torznab API requests
 func Torznab(w http.ResponseWriter, r *http.Request) {
-	// Validate API key
+	// Validate API key: accept legacy config key OR multi-user key with torznab permission
 	cfg := config.Get()
 	apiKey := r.URL.Query().Get("apikey")
+	if apiKey == "" {
+		apiKey = r.Header.Get("X-API-Key")
+	}
 
-	if cfg.Server.APIKey != "" && apiKey != cfg.Server.APIKey {
+	authenticated := false
+
+	// Check legacy single API key
+	if cfg.Server.APIKey != "" && apiKey == cfg.Server.APIKey {
+		authenticated = true
+	}
+
+	// Check multi-user API keys with torznab permission
+	if !authenticated && apiKey != "" {
+		storage := middleware.GetAPIKeyStorage()
+		if key, err := storage.ValidateKey(apiKey); err == nil && key != nil {
+			if key.HasAnyPermission(apikeys.PermissionTorznab, apikeys.PermissionAdmin) {
+				authenticated = true
+			}
+		}
+	}
+
+	// If auth is required and not authenticated, reject
+	if !authenticated && (cfg.Server.APIKey != "" || apiKey != "") {
 		respondTorznabError(w, torznab.ErrorIncorrectUserCreds, "Invalid API key")
 		return
 	}

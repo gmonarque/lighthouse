@@ -24,6 +24,12 @@ type Indexer struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	stats        IndexerStats
+
+	// Cached trust data to avoid repeated DB queries per event
+	trustedSet   map[string]bool // hex pubkeys that are trusted
+	blacklistSet map[string]bool // hex pubkeys that are blacklisted
+	cacheMu      sync.RWMutex
+	cacheExpiry  time.Time
 }
 
 // IndexerStats tracks indexer statistics
@@ -92,7 +98,28 @@ func (idx *Indexer) Start(ctx context.Context) error {
 
 	log.Info().Int("trusted_uploaders", len(trustedPubkeys)).Msg("Subscribing to trusted uploaders")
 
-	// Subscribe to torrent events from trusted uploaders only
+	// Fetch history via paginated queries, resuming from the latest event we already have
+	go func() {
+		sinceTimestamp, err := database.GetLatestEventTimestamp()
+		if err != nil {
+			log.Warn().Err(err).Msg("Failed to get latest event timestamp, fetching full history")
+			sinceTimestamp = 0
+		}
+
+		if sinceTimestamp > 0 {
+			log.Info().Int64("since_unix", sinceTimestamp).Msg("Resuming historical fetch from last known event")
+		} else {
+			log.Info().Msg("Starting full historical fetch (first run)")
+		}
+
+		if err := idx.relayManager.FetchAllHistoricalTorrents(idx.ctx, trustedPubkeys, sinceTimestamp, func(event *gonostr.Event, relayURL string) {
+			idx.processEvent(event, relayURL)
+		}); err != nil {
+			log.Error().Err(err).Msg("Historical fetch failed")
+		}
+	}()
+
+	// Subscribe to torrent events from trusted uploaders only (real-time + latest batch)
 	err = idx.relayManager.SubscribeTrustedTorrents(idx.ctx, trustedPubkeys, func(event *gonostr.Event, relayURL string) {
 		idx.processEvent(event, relayURL)
 	})
@@ -222,51 +249,84 @@ func (idx *Indexer) processEvent(event *gonostr.Event, relayURL string) {
 	}
 }
 
-// isBlacklisted checks if a pubkey is blacklisted
-func (idx *Indexer) isBlacklisted(pubkey string) bool {
-	db := database.Get()
-	var count int
-	err := db.QueryRow("SELECT COUNT(*) FROM trust_blacklist WHERE npub = ?", pubkey).Scan(&count)
-	if err != nil {
-		return false
+// refreshTrustCache rebuilds the in-memory trust and blacklist sets from the DB.
+// The cache is refreshed at most once per minute.
+func (idx *Indexer) refreshTrustCache() {
+	idx.cacheMu.RLock()
+	if time.Now().Before(idx.cacheExpiry) {
+		idx.cacheMu.RUnlock()
+		return
 	}
-	return count > 0
-}
+	idx.cacheMu.RUnlock()
 
-// isTrusted checks if a pubkey is trusted based on whitelist and trust depth
-func (idx *Indexer) isTrusted(pubkey string) bool {
+	idx.cacheMu.Lock()
+	defer idx.cacheMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if time.Now().Before(idx.cacheExpiry) {
+		return
+	}
+
+	db := database.Get()
+
+	// Build trusted set (store both hex and npub forms for fast lookup)
 	wot := trust.NewWebOfTrust()
 	trustedUploaders, err := wot.GetTrustedUploaders()
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to get trusted uploaders")
-		return false
+		log.Error().Err(err).Msg("Failed to refresh trusted uploaders cache")
+		return
 	}
 
-	// If no trusted uploaders configured, reject all (strict mode)
-	if len(trustedUploaders) == 0 {
-		return false
-	}
-
-	// Convert pubkey to npub for comparison if needed
-	npub, err := nostr.HexToNpub(pubkey)
-	if err != nil {
-		npub = pubkey // Use as-is if conversion fails
-	}
-
-	// Check if pubkey (hex) or npub is in trusted list
-	for _, trusted := range trustedUploaders {
-		// Convert trusted npub to hex for comparison
-		trustedHex, err := nostr.NpubToHex(trusted)
-		if err != nil {
-			trustedHex = trusted
-		}
-
-		if pubkey == trustedHex || pubkey == trusted || npub == trusted {
-			return true
+	newTrusted := make(map[string]bool, len(trustedUploaders)*2)
+	for _, npubOrHex := range trustedUploaders {
+		newTrusted[npubOrHex] = true
+		if hexPk, err := nostr.NpubToHex(npubOrHex); err == nil {
+			newTrusted[hexPk] = true
 		}
 	}
 
-	return false
+	// Build blacklist set
+	newBlacklist := make(map[string]bool)
+	rows, err := db.Query("SELECT npub FROM trust_blacklist")
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var npub string
+			if rows.Scan(&npub) == nil {
+				newBlacklist[npub] = true
+				if hexPk, err := nostr.NpubToHex(npub); err == nil {
+					newBlacklist[hexPk] = true
+				}
+			}
+		}
+	}
+
+	idx.trustedSet = newTrusted
+	idx.blacklistSet = newBlacklist
+	idx.cacheExpiry = time.Now().Add(60 * time.Second)
+
+	log.Debug().Int("trusted", len(trustedUploaders)).Int("blacklisted", len(newBlacklist)/2).Msg("Trust cache refreshed")
+}
+
+// isBlacklisted checks if a pubkey is blacklisted (uses cache)
+func (idx *Indexer) isBlacklisted(pubkey string) bool {
+	idx.refreshTrustCache()
+	idx.cacheMu.RLock()
+	defer idx.cacheMu.RUnlock()
+	return idx.blacklistSet[pubkey]
+}
+
+// isTrusted checks if a pubkey is trusted based on whitelist and trust depth (uses cache)
+func (idx *Indexer) isTrusted(pubkey string) bool {
+	idx.refreshTrustCache()
+	idx.cacheMu.RLock()
+	defer idx.cacheMu.RUnlock()
+
+	if len(idx.trustedSet) == 0 {
+		return false
+	}
+
+	return idx.trustedSet[pubkey]
 }
 
 // matchesTagFilter checks if a torrent matches the configured tag filter

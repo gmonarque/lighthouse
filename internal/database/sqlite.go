@@ -43,6 +43,11 @@ func Init(dbPath string) error {
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
 
+	// Performance PRAGMAs for large databases
+	db.Exec("PRAGMA cache_size = -65536")       // 64MB cache (default is 2MB)
+	db.Exec("PRAGMA mmap_size = 268435456")      // 256MB memory-mapped I/O
+	db.Exec("PRAGMA temp_store = MEMORY")        // Temp tables in memory
+
 	// Run schema
 	if err := runSchema(); err != nil {
 		return fmt.Errorf("failed to run schema: %w", err)
@@ -306,6 +311,22 @@ func GetTorrentsPerDay(days int) ([]map[string]interface{}, error) {
 	}
 
 	return stats, nil
+}
+
+// GetLatestEventTimestamp returns a unix timestamp to resume historical fetch from.
+// Uses MAX(first_seen_at) from torrents (indexed, fast) minus a 1-hour buffer to
+// account for clock skew between local time and relay event timestamps, and to
+// catch any late-arriving events. This means a small overlap is re-processed on
+// restart, which is safe since the deduplicator handles duplicates.
+func GetLatestEventTimestamp() (int64, error) {
+	var ts int64
+	err := db.QueryRow(`
+		SELECT COALESCE(MAX(strftime('%s', first_seen_at)), 0) FROM torrents
+	`).Scan(&ts)
+	if ts > 3600 {
+		ts -= 3600 // 1-hour buffer for clock skew and late arrivals
+	}
+	return ts, err
 }
 
 // LogActivity logs an activity event
